@@ -51,6 +51,7 @@ type ConfigFile struct {
 	AuthConfigs      map[string]types.AuthConfig `json:"auths"`
 	HTTPHeaders      map[string]string           `json:"HttpHeaders,omitempty"`
 	PsFormat         string                      `json:"psFormat,omitempty"`
+	StatsFormat      string                      `json:"statsFormat,omitempty"`
 	ImagesFormat     string                      `json:"imagesFormat,omitempty"`
 	DetachKeys       string                      `json:"detachKeys,omitempty"`
 	CredentialsStore string                      `json:"credsStore,omitempty"`
@@ -287,3 +288,4 @@ func decodeAuth(authStr string) (string, string, error) {
 	password := strings.Trim(arr[1], "\x00")
 	return arr[0], password, nil
 }
+

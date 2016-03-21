@@ -2,29 +2,21 @@ package client
 
 import (
 	"encoding/json"
-	"fmt"
-	"io"
+//	"fmt"
+//	"io"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/docker/docker/api/client/formatter"
 	"github.com/docker/engine-api/client"
 	"github.com/docker/engine-api/types"
-	"github.com/docker/go-units"
+//	"github.com/docker/go-units"
 	"golang.org/x/net/context"
 )
 
 type containerStats struct {
-	Name             string
-	CPUPercentage    float64
-	Memory           float64
-	MemoryLimit      float64
-	MemoryPercentage float64
-	NetworkRx        float64
-	NetworkTx        float64
-	BlockRead        float64
-	BlockWrite       float64
-	PidsCurrent      uint64
+	types.ContainerStats
 	mu               sync.RWMutex
 	err              error
 }
@@ -37,7 +29,7 @@ type stats struct {
 func (s *stats) add(cs *containerStats) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, exists := s.isKnownContainer(cs.Name); !exists {
+	if _, exists := s.isKnownContainer(cs.ID); !exists {
 		s.cs = append(s.cs, cs)
 		return true
 	}
@@ -54,7 +46,7 @@ func (s *stats) remove(id string) {
 
 func (s *stats) isKnownContainer(cid string) (int, bool) {
 	for i, c := range s.cs {
-		if c.Name == cid {
+		if c.ID == cid {
 			return i, true
 		}
 	}
@@ -77,7 +69,7 @@ func (s *containerStats) Collect(cli client.APIClient, streamStats bool, waitFir
 		}
 	}()
 
-	responseBody, err := cli.ContainerStats(context.Background(), s.Name, streamStats)
+	responseBody, err := cli.ContainerStats(context.Background(), s.ID, streamStats)
 	if err != nil {
 		s.mu.Lock()
 		s.err = err
@@ -164,20 +156,42 @@ func (s *containerStats) Collect(cli client.APIClient, streamStats bool, waitFir
 	}
 }
 
-func (s *containerStats) Display(w io.Writer) error {
+func (s *containerStats) Display(cli *DockerCli, format *string, trunc bool) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.err != nil {
 		return s.err
 	}
-	fmt.Fprintf(w, "%s\t%.2f%%\t%s / %s\t%.2f%%\t%s / %s\t%s / %s\t%d\n",
-		s.Name,
-		s.CPUPercentage,
-		units.HumanSize(s.Memory), units.HumanSize(s.MemoryLimit),
-		s.MemoryPercentage,
-		units.HumanSize(s.NetworkRx), units.HumanSize(s.NetworkTx),
-		units.HumanSize(s.BlockRead), units.HumanSize(s.BlockWrite),
-		s.PidsCurrent)
+	f := *format
+	if len(f) == 0 {
+		if len(cli.StatsFormat()) > 0{
+			f = cli.StatsFormat()
+		} else {
+			f = "table"
+		}
+	}
+	
+	statsCtx := formatter.ContainerStatsContext{
+		Context: formatter.Context{
+			Output: cli.out,
+			Format: f,
+			Quiet:  false,
+			Trunc:  trunc,
+		},
+		ShowName: strings.ToLower(f) == "name",
+		Stats:    []types.ContainerStats{s.ContainerStats},
+		//Stats: []types.ContainerStats{s.Name, s.CPUPercentage, s.Memory, s.MemoryLimit, s.MemoryPercentage, s.NetworkRx, s.NetworkTx, s.BlockRead, s.BlockWrite, s.PidsCurrent},
+	}
+
+	statsCtx.Write()
+	//fmt.Fprintf(w, "%s\t%.2f%%\t%s / %s\t%.2f%%\t%s / %s\t%s / %s\t%d\n",
+	//	s.Name,
+	//	s.CPUPercentage,
+	//	units.HumanSize(s.Memory), units.HumanSize(s.MemoryLimit),
+	//	s.MemoryPercentage,
+	//	units.HumanSize(s.NetworkRx), units.HumanSize(s.NetworkTx),
+	//	units.HumanSize(s.BlockRead), units.HumanSize(s.BlockWrite),
+	//	s.PidsCurrent)
 	return nil
 }
 
@@ -217,3 +231,4 @@ func calculateNetwork(network map[string]types.NetworkStats) (float64, float64) 
 	}
 	return rx, tx
 }
+

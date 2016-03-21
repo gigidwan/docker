@@ -5,7 +5,7 @@ import (
 	"io"
 	"strings"
 	"sync"
-	"text/tabwriter"
+//	"text/tabwriter"
 	"time"
 
 	"golang.org/x/net/context"
@@ -25,6 +25,9 @@ func (cli *DockerCli) CmdStats(args ...string) error {
 	cmd := Cli.Subcmd("stats", []string{"[CONTAINER...]"}, Cli.DockerCommands["stats"].Description, true)
 	all := cmd.Bool([]string{"a", "-all"}, false, "Show all containers (default shows just running)")
 	noStream := cmd.Bool([]string{"-no-stream"}, false, "Disable streaming stats and only pull the first result")
+	noTrunc := cmd.Bool([]string{"-no-trunc"}, false, "Don't truncate output")
+	format := cmd.String([]string{"-format"}, "", "Pretty-print containers using a Go template")
+	
 
 	cmd.ParseFlags(args, true)
 
@@ -75,8 +78,10 @@ func (cli *DockerCli) CmdStats(args ...string) error {
 			closeChan <- err
 		}
 		for _, container := range cs {
-			s := &containerStats{Name: container.ID[:12]}
-			if cStats.add(s) {
+			s := containerStats{}
+			s.ID = container.ID[:12]
+			s.Name = strings.Trim(container.Names[0], "/")
+			if cStats.add(&s) {
 				waitFirst.Add(1)
 				go s.Collect(cli.client, !*noStream, waitFirst)
 			}
@@ -92,8 +97,14 @@ func (cli *DockerCli) CmdStats(args ...string) error {
 		eh := eventHandler{handlers: make(map[string]func(events.Message))}
 		eh.Handle("create", func(e events.Message) {
 			if *all {
-				s := &containerStats{Name: e.ID[:12]}
-				if cStats.add(s) {
+				cs, err := cli.client.ContainerInspect(context.Background(), e.ID)
+				if err != nil {
+					closeChan <- err
+				}
+				s := containerStats{}
+				s.ID = cs.ID[:12]
+				s.Name = strings.Trim(cs.Name, "/")
+				if cStats.add(&s) {
 					waitFirst.Add(1)
 					go s.Collect(cli.client, !*noStream, waitFirst)
 				}
@@ -101,8 +112,14 @@ func (cli *DockerCli) CmdStats(args ...string) error {
 		})
 
 		eh.Handle("start", func(e events.Message) {
-			s := &containerStats{Name: e.ID[:12]}
-			if cStats.add(s) {
+			cs, err := cli.client.ContainerInspect(context.Background(), e.ID)
+			if err != nil {
+				closeChan <- err
+			}
+			s := containerStats{}
+			s.ID = cs.ID[:12]
+			s.Name = strings.Trim(cs.Name, "/")
+			if cStats.add(&s) {
 				waitFirst.Add(1)
 				go s.Collect(cli.client, !*noStream, waitFirst)
 			}
@@ -127,8 +144,14 @@ func (cli *DockerCli) CmdStats(args ...string) error {
 		// Artificially send creation events for the containers we were asked to
 		// monitor (same code path than we use when monitoring all containers).
 		for _, name := range names {
-			s := &containerStats{Name: name}
-			if cStats.add(s) {
+			cs, err := cli.client.ContainerInspect(context.Background(), name)
+			if err != nil {
+				closeChan <- err
+			}
+			s := containerStats{}
+			s.ID = cs.ID[:12]
+			s.Name = strings.Trim(cs.Name, "/")
+			if cStats.add(&s) {
 				waitFirst.Add(1)
 				go s.Collect(cli.client, !*noStream, waitFirst)
 			}
@@ -158,21 +181,25 @@ func (cli *DockerCli) CmdStats(args ...string) error {
 	// before print to screen, make sure each container get at least one valid stat data
 	waitFirst.Wait()
 
-	w := tabwriter.NewWriter(cli.out, 20, 1, 3, ' ', 0)
-	printHeader := func() {
-		if !*noStream {
-			fmt.Fprint(cli.out, "\033[2J")
-			fmt.Fprint(cli.out, "\033[H")
-		}
-		io.WriteString(w, "CONTAINER\tCPU %\tMEM USAGE / LIMIT\tMEM %\tNET I/O\tBLOCK I/O\tPIDS\n")
-	}
+	//w := tabwriter.NewWriter(cli.out, 20, 1, 3, ' ', 0)
+	//printHeader := func() {
+	//	if !*noStream {
+	//		fmt.Fprint(cli.out, "\033[2J")
+	//		fmt.Fprint(cli.out, "\033[H")
+	//	}
+		//io.WriteString(w, "CONTAINER\tCPU %\tMEM USAGE / LIMIT\tMEM %\tNET I/O\tBLOCK I/O\tPIDS\n")
+	//}
 
 	for range time.Tick(500 * time.Millisecond) {
-		printHeader()
+		//printHeader()
 		toRemove := []int{}
 		cStats.mu.Lock()
 		for i, s := range cStats.cs {
-			if err := s.Display(w); err != nil && !*noStream {
+			if !*noStream {
+				fmt.Fprint(cli.out, "\033[2J")
+				fmt.Fprint(cli.out, "\033[H")
+			}
+			if err := s.Display(cli, format, !*noTrunc); err != nil && !*noStream {
 				toRemove = append(toRemove, i)
 			}
 		}
@@ -184,7 +211,7 @@ func (cli *DockerCli) CmdStats(args ...string) error {
 			return nil
 		}
 		cStats.mu.Unlock()
-		w.Flush()
+		//w.Flush()
 		if *noStream {
 			break
 		}
@@ -206,3 +233,4 @@ func (cli *DockerCli) CmdStats(args ...string) error {
 	}
 	return nil
 }
+

@@ -77,6 +77,12 @@ func (cli *DockerCli) PsFormat() string {
 	return cli.configFile.PsFormat
 }
 
+// PsFormat returns the format string specified in the configuration.
+// String contains columns and format specification, for example {{ID}}\t{{Name}}.
+func (cli *DockerCli) StatsFormat() string {
+	return cli.configFile.StatsFormat
+}
+
 // ImagesFormat returns the format string specified in the configuration.
 // String contains columns and format specification, for example {{ID}}\t{{Name}}.
 func (cli *DockerCli) ImagesFormat() string {
@@ -209,3 +215,4 @@ func newHTTPClient(host string, tlsOptions *tlsconfig.Options) (*http.Client, er
 		Transport: tr,
 	}, nil
 }
+

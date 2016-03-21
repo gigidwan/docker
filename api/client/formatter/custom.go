@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+
 	"github.com/docker/docker/api"
 	"github.com/docker/docker/pkg/stringid"
 	"github.com/docker/docker/pkg/stringutils"
@@ -16,22 +17,31 @@ import (
 const (
 	tableKey = "table"
 
-	containerIDHeader  = "CONTAINER ID"
-	imageHeader        = "IMAGE"
-	namesHeader        = "NAMES"
-	commandHeader      = "COMMAND"
-	createdSinceHeader = "CREATED"
-	createdAtHeader    = "CREATED AT"
-	runningForHeader   = "CREATED"
-	statusHeader       = "STATUS"
-	portsHeader        = "PORTS"
-	sizeHeader         = "SIZE"
-	labelsHeader       = "LABELS"
-	imageIDHeader      = "IMAGE ID"
-	repositoryHeader   = "REPOSITORY"
-	tagHeader          = "TAG"
-	digestHeader       = "DIGEST"
-	mountsHeader       = "MOUNTS"
+	containerIDHeader      = "CONTAINER ID"
+	imageHeader            = "IMAGE"
+	namesHeader            = "NAMES"
+	commandHeader          = "COMMAND"
+	createdSinceHeader     = "CREATED"
+	createdAtHeader        = "CREATED AT"
+	runningForHeader       = "CREATED"
+	statusHeader           = "STATUS"
+	portsHeader            = "PORTS"
+	sizeHeader             = "SIZE"
+	labelsHeader           = "LABELS"
+	imageIDHeader          = "IMAGE ID"
+	repositoryHeader       = "REPOSITORY"
+	tagHeader              = "TAG"
+	digestHeader           = "DIGEST"
+	mountsHeader           = "MOUNTS"
+	containerHeader        = "CONTAINER"
+	nameHeader             = "CONTAINER NAMES"
+	statsCPUHeader         = "CPU %"
+	statsMemUsageHeader    = "MEM USAGE / LIMIT"
+	statsMemHeader         = "MEM %"
+	statsNetHeader         = "NET I/O"
+	statsBlockHeader       = "BLOCK I/O"
+	statsPidHeader         = "PIDS"
+	
 )
 
 type containerContext struct {
@@ -40,12 +50,82 @@ type containerContext struct {
 	c     types.Container
 }
 
+type containerStatsContext struct {
+	baseSubContext
+	trunc bool
+//	cli client.APIClient
+	s     types.ContainerStats
+}
+
 func (c *containerContext) ID() string {
 	c.addHeader(containerIDHeader)
 	if c.trunc {
 		return stringid.TruncateID(c.c.ID)
 	}
 	return c.c.ID
+}
+
+func (c *containerStatsContext) ID() string {
+	c.addHeader(containerHeader)
+	if c.trunc {
+		return stringid.TruncateID(c.s.ID)
+	}
+	return c.s.ID
+}
+
+func (c *containerStatsContext) Name() string {
+	c.addHeader(nameHeader)
+	//var cli client.APIClient
+	//cs, _ := cli.ContainerInspect(context.Background(), c.s.Name)
+//	return strings.Trim(c.s.Name, "/")
+	return c.s.Name
+}
+
+func (c *containerStatsContext) Cpu() string {
+	c.addHeader(statsCPUHeader)
+	perc := c.s.CPUPercentage
+	percentage := fmt.Sprintf("%.2f%%", perc)
+	return percentage
+}
+
+func (c *containerStatsContext) MemUsage() string {
+	c.addHeader(statsMemUsageHeader)
+	usage := units.HumanSize(c.s.Memory)
+	limit := units.HumanSize(float64(c.s.MemoryLimit))
+
+	mu := fmt.Sprintf("%s / %s", usage, limit)
+	return mu
+}
+
+func (c *containerStatsContext) Mem() string {
+	c.addHeader(statsMemHeader)
+	perc := c.s.MemoryPercentage
+	percentage := fmt.Sprintf("%.2f%%", perc)
+	return percentage
+}
+
+func (c *containerStatsContext) NetIO() string {
+	c.addHeader(statsNetHeader)
+	NetRx := units.HumanSize(c.s.NetworkRx)
+	NetTx := units.HumanSize(float64(c.s.NetworkTx))
+
+	net := fmt.Sprintf("%s / %s", NetRx, NetTx)
+	return net
+}
+
+func (c *containerStatsContext) BlockIO() string {
+	c.addHeader(statsBlockHeader)
+	read := units.HumanSize(c.s.BlockRead)
+	write := units.HumanSize(float64(c.s.BlockWrite))
+
+	block := fmt.Sprintf("%s / %s", read, write)
+	return block
+}
+
+func (c *containerStatsContext) Pid() string {
+	c.addHeader(statsPidHeader)
+	pid := fmt.Sprintf("%d", c.s.PidsCurrent)
+	return pid
 }
 
 func (c *containerContext) Names() string {
@@ -235,3 +315,4 @@ func stripNamePrefix(ss []string) []string {
 
 	return ss
 }
+

@@ -18,6 +18,7 @@ const (
 	rawFormatKey   = "raw"
 
 	defaultContainerTableFormat       = "table {{.ID}}\t{{.Image}}\t{{.Command}}\t{{.RunningFor}} ago\t{{.Status}}\t{{.Ports}}\t{{.Names}}"
+	defaultContainerStatsTableFormat  = "table {{.ID}}\t{{.Cpu}}\t{{.MemUsage}}\t{{.Mem}}\t{{.NetIO}}\t{{.BlockIO}}\t{{.Pid}}"
 	defaultImageTableFormat           = "table {{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.CreatedSince}} ago\t{{.Size}}"
 	defaultImageTableFormatWithDigest = "table {{.Repository}}\t{{.Tag}}\t{{.Digest}}\t{{.ID}}\t{{.CreatedSince}} ago\t{{.Size}}"
 	defaultQuietFormat                = "{{.ID}}"
@@ -103,6 +104,14 @@ type ContainerContext struct {
 	Containers []types.Container
 }
 
+// ContainerStatsContext contains container specific information required by the formatter, encapsulate a Context struct.
+type ContainerStatsContext struct {
+	Context
+	ShowName bool
+	// Container Stats
+	Stats []types.ContainerStats
+}
+
 // ImageContext contains image specific information required by the formater, encapsulate a Context struct.
 type ImageContext struct {
 	Context
@@ -161,6 +170,51 @@ ports: {{.Ports}}
 	}
 
 	ctx.postformat(tmpl, &containerContext{})
+}
+
+func (ctx ContainerStatsContext) Write() {
+	switch ctx.Format {
+	case tableFormatKey:
+		ctx.Format = defaultContainerStatsTableFormat
+	case rawFormatKey:
+		ctx.Format = `container_id: {{.ID}}
+cpu: {{.Cpu}}
+mem_usage: {{.MemUsage}}
+mem: {{.Mem}}
+net_io: {{.NetIO}}
+block_io: {{.BlockIO}}
+pid: {{.Pid}}
+`
+		if ctx.ShowName {
+			ctx.Format += `name: {{.Name}}
+`
+		}
+}
+
+	ctx.buffer = bytes.NewBufferString("")
+	ctx.preformat()
+
+	if ctx.table && ctx.ShowName {
+		ctx.finalFormat += "\t{{.Namee}}"
+	}
+
+	tmpl, err := ctx.parseFormat()
+	if err != nil {
+		return
+	}
+
+	for _, stat := range ctx.Stats {
+		containerStatCtx := &containerStatsContext{
+			trunc: ctx.Trunc,
+			s:     stat,
+		}
+		err = ctx.contextFormat(tmpl, containerStatCtx)
+		if err != nil {
+			return
+		}
+	}
+
+	ctx.postformat(tmpl, &containerStatsContext{})
 }
 
 func (ctx ImageContext) Write() {
@@ -253,3 +307,4 @@ virtual_size: {{.Size}}
 
 	ctx.postformat(tmpl, &imageContext{})
 }
+
