@@ -241,16 +241,6 @@ func Parse(cmd *flag.FlagSet, args []string) (*container.Config, *container.Host
 		entrypoint = strslice.StrSlice{*flEntrypoint}
 	}
 
-	var (
-		domainname string
-		hostname   = *flHostname
-		parts      = strings.SplitN(hostname, ".", 2)
-	)
-	if len(parts) > 1 {
-		hostname = parts[0]
-		domainname = parts[1]
-	}
-
 	ports, portBindings, err := nat.ParsePortSpecs(flPublish.GetAll())
 	if err != nil {
 		return nil, nil, nil, cmd, err
@@ -362,8 +352,7 @@ func Parse(cmd *flag.FlagSet, args []string) (*container.Config, *container.Host
 	}
 
 	config := &container.Config{
-		Hostname:     hostname,
-		Domainname:   domainname,
+		Hostname:     *flHostname,
 		ExposedPorts: ports,
 		User:         *flUser,
 		Tty:          *flTty,
@@ -508,9 +497,13 @@ func parseLoggingOpts(loggingDriver string, loggingOpts []string) (map[string]st
 // takes a local seccomp daemon, reads the file contents for sending to the daemon
 func parseSecurityOpts(securityOpts []string) ([]string, error) {
 	for key, opt := range securityOpts {
-		con := strings.SplitN(opt, ":", 2)
+		con := strings.SplitN(opt, "=", 2)
 		if len(con) == 1 && con[0] != "no-new-privileges" {
-			return securityOpts, fmt.Errorf("Invalid --security-opt: %q", opt)
+			if strings.Index(opt, ":") != -1 {
+				con = strings.SplitN(opt, ":", 2)
+			} else {
+				return securityOpts, fmt.Errorf("Invalid --security-opt: %q", opt)
+			}
 		}
 		if con[0] == "seccomp" && con[1] != "unconfined" {
 			f, err := ioutil.ReadFile(con[1])
@@ -521,7 +514,7 @@ func parseSecurityOpts(securityOpts []string) ([]string, error) {
 			if err := json.Compact(b, f); err != nil {
 				return securityOpts, fmt.Errorf("compacting json for seccomp profile (%s) failed: %v", con[1], err)
 			}
-			securityOpts[key] = fmt.Sprintf("seccomp:%s", b.Bytes())
+			securityOpts[key] = fmt.Sprintf("seccomp=%s", b.Bytes())
 		}
 	}
 

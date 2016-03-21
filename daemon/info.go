@@ -84,7 +84,6 @@ func (daemon *Daemon) SystemInfo() (*types.Info, error) {
 		NFd:                fileutils.GetTotalUsedFds(),
 		NGoroutines:        runtime.NumGoroutine(),
 		SystemTime:         time.Now().Format(time.RFC3339Nano),
-		ExecutionDriver:    daemon.ExecutionDriver().Name(),
 		LoggingDriver:      daemon.defaultLogConfig.Type,
 		CgroupDriver:       daemon.getCgroupDriver(),
 		NEventsListener:    daemon.EventsService.SubscribersCount(),
@@ -141,9 +140,13 @@ func (daemon *Daemon) SystemVersion() types.Version {
 		Experimental: utils.ExperimentalBuild(),
 	}
 
-	if kernelVersion, err := kernel.GetKernelVersion(); err == nil {
-		v.KernelVersion = kernelVersion.String()
+	kernelVersion := "<unknown>"
+	if kv, err := kernel.GetKernelVersion(); err != nil {
+		logrus.Warnf("Could not get kernel version: %v", err)
+	} else {
+		kernelVersion = kv.String()
 	}
+	v.KernelVersion = kernelVersion
 
 	return v
 }

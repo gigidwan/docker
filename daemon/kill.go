@@ -27,7 +27,7 @@ func isErrNoSuchProcess(err error) bool {
 	return ok
 }
 
-// ContainerKill send signal to the container
+// ContainerKill sends signal to the container
 // If no signal is given (sig 0), then Kill with SIGKILL and wait
 // for the container to exit.
 // If a signal is given, then just send it to the container and return.
@@ -68,6 +68,10 @@ func (daemon *Daemon) killWithSignal(container *container.Container, sig int) er
 	}
 
 	container.ExitOnNext()
+
+	if !daemon.IsShuttingDown() {
+		container.HasBeenManuallyStopped = true
+	}
 
 	// if the container is currently restarting we do not need to send the signal
 	// to the process.  Telling the monitor that it should exit on it's next event
