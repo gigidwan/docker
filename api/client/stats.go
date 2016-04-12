@@ -10,6 +10,7 @@ import (
 
 	"golang.org/x/net/context"
 
+	"github.com/docker/docker/api/client/stat"
 	Cli "github.com/docker/docker/cli"
 	"github.com/docker/engine-api/types"
 	"github.com/docker/engine-api/types/events"
@@ -78,9 +79,13 @@ func (cli *DockerCli) CmdStats(args ...string) error {
 			closeChan <- err
 		}
 		for _, container := range cs {
-			s := containerStats{}
-			s.ID = container.ID[:12]
-			s.Name = strings.Trim(container.Names[0], "/")
+			s := containerStats{cs: stat.ContainerStats{
+						ID:   container.ID,
+						Name: strings.Trim(container.Names[0], "/"),
+						},
+					}
+//			s.ID = container.ID
+//			s.Name = strings.Trim(container.Names[0], "/")
 			if cStats.add(&s) {
 				waitFirst.Add(1)
 				go s.Collect(cli.client, !*noStream, waitFirst)
@@ -101,9 +106,13 @@ func (cli *DockerCli) CmdStats(args ...string) error {
 				if err != nil {
 					closeChan <- err
 				}
-				s := containerStats{}
-				s.ID = cs.ID[:12]
-				s.Name = strings.Trim(cs.Name, "/")
+				s := containerStats{cs: stat.ContainerStats{
+								ID:   cs.ID,
+                                                		Name: strings.Trim(cs.Name, "/"),
+                                                	},
+						}
+//				s.ID = cs.ID
+//				s.Name = strings.Trim(cs.Name, "/")
 				if cStats.add(&s) {
 					waitFirst.Add(1)
 					go s.Collect(cli.client, !*noStream, waitFirst)
@@ -116,9 +125,14 @@ func (cli *DockerCli) CmdStats(args ...string) error {
 			if err != nil {
 				closeChan <- err
 			}
-			s := containerStats{}
-			s.ID = cs.ID[:12]
-			s.Name = strings.Trim(cs.Name, "/")
+			s := containerStats{cs: stat.ContainerStats{
+							ID:   cs.ID,
+                                                        Name: strings.Trim(cs.Name, "/"),
+						},
+                                            }
+//			s := containerStats{}
+//			s.ID = cs.ID
+//			s.Name = strings.Trim(cs.Name, "/")
 			if cStats.add(&s) {
 				waitFirst.Add(1)
 				go s.Collect(cli.client, !*noStream, waitFirst)
@@ -148,9 +162,14 @@ func (cli *DockerCli) CmdStats(args ...string) error {
 			if err != nil {
 				closeChan <- err
 			}
-			s := containerStats{}
-			s.ID = cs.ID[:12]
-			s.Name = strings.Trim(cs.Name, "/")
+			s := containerStats{cs: stat.ContainerStats{
+                                                        ID:   cs.ID,
+                                                        Name: strings.Trim(cs.Name, "/"),
+                                                },
+                                            }
+//			s := containerStats{}
+//			s.ID = cs.ID
+//			s.Name = strings.Trim(cs.Name, "/")
 			if cStats.add(&s) {
 				waitFirst.Add(1)
 				go s.Collect(cli.client, !*noStream, waitFirst)
@@ -168,7 +187,7 @@ func (cli *DockerCli) CmdStats(args ...string) error {
 		for _, c := range cStats.cs {
 			c.mu.Lock()
 			if c.err != nil {
-				errs = append(errs, fmt.Sprintf("%s: %v", c.Name, c.err))
+				errs = append(errs, fmt.Sprintf("%s: %v", c.cs.ID, c.err))
 			}
 			c.mu.Unlock()
 		}
@@ -233,4 +252,3 @@ func (cli *DockerCli) CmdStats(args ...string) error {
 	}
 	return nil
 }
-

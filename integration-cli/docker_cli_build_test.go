@@ -5799,6 +5799,83 @@ func (s *DockerTrustSuite) TestBuildContextDirIsSymlink(c *check.C) {
 	}
 }
 
+func (s *DockerTrustSuite) TestTrustedBuildTagFromReleasesRole(c *check.C) {
+	testRequires(c, NotaryHosting)
+
+	latestTag := s.setupTrustedImage(c, "trusted-build-releases-role")
+	repoName := strings.TrimSuffix(latestTag, ":latest")
+
+	// Now create the releases role
+	s.notaryCreateDelegation(c, repoName, "targets/releases", s.not.keys[0].Public)
+	s.notaryImportKey(c, repoName, "targets/releases", s.not.keys[0].Private)
+	s.notaryPublish(c, repoName)
+
+	// push a different tag to the releases role
+	otherTag := fmt.Sprintf("%s:other", repoName)
+	dockerCmd(c, "tag", "busybox", otherTag)
+
+	pushCmd := exec.Command(dockerBinary, "push", otherTag)
+	s.trustedCmd(pushCmd)
+	out, _, err := runCommandWithOutput(pushCmd)
+	c.Assert(err, check.IsNil, check.Commentf("Trusted push failed: %s", out))
+	s.assertTargetInRoles(c, repoName, "other", "targets/releases")
+	s.assertTargetNotInRoles(c, repoName, "other", "targets")
+
+	out, status := dockerCmd(c, "rmi", otherTag)
+	c.Assert(status, check.Equals, 0, check.Commentf("docker rmi failed: %s", out))
+
+	dockerFile := fmt.Sprintf(`
+  FROM %s
+  RUN []
+    `, otherTag)
+
+	name := "testtrustedbuildreleasesrole"
+
+	buildCmd := buildImageCmd(name, dockerFile, true)
+	s.trustedCmd(buildCmd)
+	out, _, err = runCommandWithOutput(buildCmd)
+	c.Assert(err, check.IsNil, check.Commentf("Trusted build failed: %s", out))
+	c.Assert(out, checker.Contains, fmt.Sprintf("FROM %s@sha", repoName))
+}
+
+func (s *DockerTrustSuite) TestTrustedBuildTagIgnoresOtherDelegationRoles(c *check.C) {
+	testRequires(c, NotaryHosting)
+
+	latestTag := s.setupTrustedImage(c, "trusted-build-releases-role")
+	repoName := strings.TrimSuffix(latestTag, ":latest")
+
+	// Now create a non-releases delegation role
+	s.notaryCreateDelegation(c, repoName, "targets/other", s.not.keys[0].Public)
+	s.notaryImportKey(c, repoName, "targets/other", s.not.keys[0].Private)
+	s.notaryPublish(c, repoName)
+
+	// push a different tag to the other role
+	otherTag := fmt.Sprintf("%s:other", repoName)
+	dockerCmd(c, "tag", "busybox", otherTag)
+
+	pushCmd := exec.Command(dockerBinary, "push", otherTag)
+	s.trustedCmd(pushCmd)
+	out, _, err := runCommandWithOutput(pushCmd)
+	c.Assert(err, check.IsNil, check.Commentf("Trusted push failed: %s", out))
+	s.assertTargetInRoles(c, repoName, "other", "targets/other")
+	s.assertTargetNotInRoles(c, repoName, "other", "targets")
+
+	out, status := dockerCmd(c, "rmi", otherTag)
+	c.Assert(status, check.Equals, 0, check.Commentf("docker rmi failed: %s", out))
+
+	dockerFile := fmt.Sprintf(`
+  FROM %s
+  RUN []
+    `, otherTag)
+
+	name := "testtrustedbuildotherrole"
+
+	buildCmd := buildImageCmd(name, dockerFile, true)
+	s.trustedCmd(buildCmd)
+	out, _, err = runCommandWithOutput(buildCmd)
+	c.Assert(err, check.NotNil, check.Commentf("Trusted build expected to fail: %s", out))
+}
+
 // Issue #15634: COPY fails when path starts with "null"
 func (s *DockerSuite) TestBuildNullStringInAddCopyVolume(c *check.C) {
 	name := "testbuildnullstringinaddcopyvolume"
@@ -6593,6 +6670,152 @@ func (s *DockerSuite) TestBuildWorkdirWindowsPath(c *check.C) {
 
 	if err != nil {
 		c.Fatal(err)
+	}
+}
+
+func (s *DockerSuite) TestBuildLabel(c *check.C) {
+	name := "testbuildlabel"
+	testLabel := "foo"
+
+	_, err := buildImage(name, `
+  FROM `+minimalBaseImage()+`
+  LABEL default foo
+`, false, "--label", testLabel)
+
+	c.Assert(err, checker.IsNil)
+
+	res := inspectFieldJSON(c, name, "Config.Labels")
+
+	var labels map[string]string
+
+	if err := json.Unmarshal([]byte(res), &labels); err != nil {
+		c.Fatal(err)
+	}
+
+	if _, ok := labels[testLabel]; !ok {
+		c.Fatal("label not found in image")
+	}
+}
+
+func (s *DockerSuite) TestBuildLabelOneNode(c *check.C) {
+	name := "testbuildlabel"
+
+	_, err := buildImage(name, "FROM busybox", false, "--label", "foo=bar")
+
+	c.Assert(err, checker.IsNil)
+
+	res, err := inspectImage(name, "json .Config.Labels")
+	c.Assert(err, checker.IsNil)
+	var labels map[string]string
+
+	if err := json.Unmarshal([]byte(res), &labels); err != nil {
+		c.Fatal(err)
+	}
+
+	v, ok := labels["foo"]
+	if !ok {
+		c.Fatal("label `foo` not found in image")
+	}
+	c.Assert(v, checker.Equals, "bar")
+}
+
+func (s *DockerSuite) TestBuildLabelCacheCommit(c *check.C) {
+	name := "testbuildlabelcachecommit"
+	testLabel := "foo"
+
+	if _, err := buildImage(name, `
+  FROM `+minimalBaseImage()+`
+  LABEL default foo
+  `, false); err != nil {
+		c.Fatal(err)
+	}
+
+	_, err := buildImage(name, `
+  FROM `+minimalBaseImage()+`
+  LABEL default foo
+`, true, "--label", testLabel)
+
+	c.Assert(err, checker.IsNil)
+
+	res := inspectFieldJSON(c, name, "Config.Labels")
+
+	var labels map[string]string
+
+	if err := json.Unmarshal([]byte(res), &labels); err != nil {
+		c.Fatal(err)
+	}
+
+	if _, ok := labels[testLabel]; !ok {
+		c.Fatal("label not found in image")
+	}
+}
+
+func (s *DockerSuite) TestBuildLabelMultiple(c *check.C) {
+	name := "testbuildlabelmultiple"
+	testLabels := map[string]string{
+		"foo": "bar",
+		"123": "456",
+	}
+
+	labelArgs := []string{}
+
+	for k, v := range testLabels {
+		labelArgs = append(labelArgs, "--label", k+"="+v)
+	}
+
+	_, err := buildImage(name, `
+  FROM `+minimalBaseImage()+`
+  LABEL default foo
+`, false, labelArgs...)
+
+	if err != nil {
+		c.Fatal("error building image with labels", err)
+	}
+
+	res := inspectFieldJSON(c, name, "Config.Labels")
+
+	var labels map[string]string
+
+	if err := json.Unmarshal([]byte(res), &labels); err != nil {
+		c.Fatal(err)
+	}
+
+	for k, v := range testLabels {
+		if x, ok := labels[k]; !ok || x != v {
+			c.Fatalf("label %s=%s not found in image", k, v)
+		}
+	}
+}
+
+func (s *DockerSuite) TestBuildLabelOverwrite(c *check.C) {
+	name := "testbuildlabeloverwrite"
+	testLabel := "foo"
+	testValue := "bar"
+
+	_, err := buildImage(name, `
+  FROM `+minimalBaseImage()+`
+  LABEL `+testLabel+`+ foo
+`, false, []string{"--label", testLabel + "=" + testValue}...)
+
+	if err != nil {
+		c.Fatal("error building image with labels", err)
+	}
+
+	res := inspectFieldJSON(c, name, "Config.Labels")
+
+	var labels map[string]string
+
+	if err := json.Unmarshal([]byte(res), &labels); err != nil {
+		c.Fatal(err)
+	}
+
+	v, ok := labels[testLabel]
+	if !ok {
+		c.Fatal("label not found in image")
+	}
+
+	if v != testValue {
+		c.Fatal("label not overwritten")
 	}
 }
 

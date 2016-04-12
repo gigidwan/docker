@@ -67,6 +67,7 @@ docker-run - Run a command in a new container
 [**--restart**[=*RESTART*]]
 [**--rm**]
 [**--security-opt**[=*[]*]]
+[**--storage-opt**[=*[]*]]
 [**--stop-signal**[=*SIGNAL*]]
 [**--shm-size**[=*[]*]]
 [**--sig-proxy**[=*true*]]
@@ -476,6 +477,13 @@ its root filesystem mounted as read only prohibiting any writes.
     "apparmor=unconfined" : Turn off apparmor confinement for the container
     "apparmor=your-profile" : Set the apparmor confinement profile for the container
 
+**--storage-opt**=[]
+   Storage driver options per container
+
+   $ docker run -it --storage-opt size=120G fedora /bin/bash
+
+   This (size) will allow to set the container rootfs size to 120G at creation time. User cannot pass a size less than the Default BaseFS Size.
+  
 **--stop-signal**=*SIGTERM*
   Signal to stop a container. Default is SIGTERM.
 
@@ -531,6 +539,7 @@ any options, the systems uses the following options:
    * [rw|ro]
    * [z|Z]
    * [`[r]shared`|`[r]slave`|`[r]private`]
+   * [nocopy]
 
 The `CONTAINER-DIR` must be an absolute path such as `/src/docs`. The `HOST-DIR`
 can be an absolute path or a `name` value. A `name` value must start with an
@@ -602,6 +611,9 @@ change propagation properties of source mount. Say `/` is source mount for
 > see mount propagation changes made on the mount point. For example, if this value
 > is `slave`, you may not be able to use the `shared` or `rshared` propagation on
 > a volume.
+
+To disable automatic copying of data from the container path to the volume, use
+the `nocopy` flag. The `nocopy` flag can be set on bind mounts and named volumes.
 
 **--volume-driver**=""
    Container's volume driver. This driver creates volumes specified either from

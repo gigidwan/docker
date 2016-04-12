@@ -15,6 +15,7 @@ docker-daemon - Enable daemon mode
 [**--cluster-advertise**[=*[]*]]
 [**--cluster-store-opt**[=*map[]*]]
 [**--config-file**[=*/etc/docker/daemon.json*]]
+[**--containerd**[=*SOCKET-PATH*]]
 [**-D**|**--debug**]
 [**--default-gateway**[=*DEFAULT-GATEWAY*]]
 [**--default-gateway-v6**[=*DEFAULT-GATEWAY-V6*]]
@@ -101,6 +102,9 @@ format.
 **--config-file**="/etc/docker/daemon.json"
   Specifies the JSON file path to load the configuration from.
 
+**--containerd**=""
+  Path to containerd socket.
+
 **-D**, **--debug**=*true*|*false*
   Enable debug mode. Default is false.
 
@@ -126,10 +130,10 @@ format.
   DNS search domains to use.
 
 **--exec-opt**=[]
-  Set exec driver options. See EXEC DRIVER OPTIONS.
+  Set runtime execution options. See RUNTIME EXECUTION OPTIONS.
 
 **--exec-root**=""
-  Path to use as the root of the Docker exec driver. Default is `/var/run/docker`.
+  Path to use as the root of the Docker execution state files. Default is `/var/run/docker`.
 
 **--fixed-cidr**=""
   IPv4 subnet for fixed IPs (e.g., 10.20.0.0/16); this subnet must be nested in the bridge subnet (which is defined by \-b or \-\-bip)
@@ -289,13 +293,13 @@ will use more space for base images the larger the device
 is.
 
 The base device size can be increased at daemon restart which will allow
-all future images and containers (based on those new images) to be of the 
+all future images and containers (based on those new images) to be of the
 new base device size.
 
-Example use: `docker daemon --storage-opt dm.basesize=50G` 
+Example use: `docker daemon --storage-opt dm.basesize=50G`
 
-This will increase the base device size to 50G. The Docker daemon will throw an 
-error if existing base device size is larger than 50G. A user can use 
+This will increase the base device size to 50G. The Docker daemon will throw an
+error if existing base device size is larger than 50G. A user can use
 this option to expand the base device size however shrinking is not permitted.
 
 This value affects the system-wide "base" empty filesystem that may already
@@ -465,16 +469,6 @@ this topic, see
 Otherwise, set this flag for migrating existing Docker daemons to a
 daemon with a supported environment.
 
-## ZFS options
-
-#### zfs.fsname
-
-Set zfs filesystem under which docker will create its own datasets.
-By default docker will pick up the zfs filesystem where docker graph
-(`/var/lib/docker`) is located.
-
-Example use: `docker daemon -s zfs --storage-opt zfs.fsname=zroot/docker`
-
 #### dm.min_free_space
 
 Specifies the min free space percent in thin pool require for new device
@@ -497,7 +491,17 @@ pool and that should automatically resolve it. If loop devices are being
 used, then stop docker, grow the size of loop files and restart docker and
 that should resolve the issue.
 
-Example use: `docker daemon --storage-opt dm.min_free_space_percent=10%`
+Example use: `docker daemon --storage-opt dm.min_free_space=10%`
+
+## ZFS options
+
+#### zfs.fsname
+
+Set zfs filesystem under which docker will create its own datasets.
+By default docker will pick up the zfs filesystem where docker graph
+(`/var/lib/docker`) is located.
+
+Example use: `docker daemon -s zfs --storage-opt zfs.fsname=zroot/docker`
 
 # CLUSTER STORE OPTIONS
 

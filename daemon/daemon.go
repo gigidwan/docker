@@ -293,6 +293,11 @@ func (daemon *Daemon) restore() error {
 		go func(c *container.Container) {
 			defer wg.Done()
 			if c.IsRunning() || c.IsPaused() {
+				// Fix activityCount such that graph mounts can be unmounted later
+				if err := daemon.layerStore.ReinitRWLayer(c.RWLayer); err != nil {
+					logrus.Errorf("Failed to ReinitRWLayer for %s due to %s", c.ID, err)
+					return
+				}
 				if err := daemon.containerd.Restore(c.ID, libcontainerd.WithRestartManager(c.RestartManager(true))); err != nil {
 					logrus.Errorf("Failed to restore with containerd: %q", err)
 					return
@@ -304,10 +309,6 @@ func (daemon *Daemon) restore() error {
 				mapLock.Lock()
 				restartContainers[c] = make(chan struct{})
 				mapLock.Unlock()
-			} else if !c.IsRunning() && !c.IsPaused() {
-				if mountid, err := daemon.layerStore.GetMountID(c.ID); err == nil {
-					daemon.cleanupMountsByID(mountid)
-				}
 			}
 
 			// if c.hostConfig.Links is nil (not just empty), then it is using the old sqlite links and needs to be migrated
@@ -997,14 +998,14 @@ func isBrokenPipe(e error) bool {
 
 // PullImage initiates a pull operation. image is the repository name to pull, and
 // tag may be either empty, or indicate a specific tag to pull.
-func (daemon *Daemon) PullImage(ref reference.Named, metaHeaders map[string][]string, authConfig *types.AuthConfig, outStream io.Writer) error {
+func (daemon *Daemon) PullImage(ctx context.Context, ref reference.Named, metaHeaders map[string][]string, authConfig *types.AuthConfig, outStream io.Writer) error {
 	// Include a buffer so that slow client connections don't affect
 	// transfer performance.
 	progressChan := make(chan progress.Progress, 100)
 
 	writesDone := make(chan struct{})
 
-	ctx, cancelFunc := context.WithCancel(context.Background())
+	ctx, cancelFunc := context.WithCancel(ctx)
 
 	go func() {
 		writeDistributionProgress(cancelFunc, outStream, progressChan)
@@ -1030,7 +1031,7 @@ func (daemon *Daemon) PullImage(ref reference.Named, metaHeaders map[string][]st
 }
 
 // PullOnBuild tells Docker to pull image referenced by `name`.
-func (daemon *Daemon) PullOnBuild(name string, authConfigs map[string]types.AuthConfig, output io.Writer) (builder.Image, error) {
+func (daemon *Daemon) PullOnBuild(ctx context.Context, name string, authConfigs map[string]types.AuthConfig, output io.Writer) (builder.Image, error) {
 	ref, err := reference.ParseNamed(name)
 	if err != nil {
 		return nil, err
@@ -1052,7 +1053,7 @@ func (daemon *Daemon) PullOnBuild(name string, authConfigs map[string]types.Auth
 		pullRegistryAuth = &resolvedConfig
 	}
 
-	if err := daemon.PullImage(ref, nil, pullRegistryAuth, output); err != nil {
+	if err := daemon.PullImage(ctx, ref, nil, pullRegistryAuth, output); err != nil {
 		return nil, err
 	}
 	return daemon.GetImage(name)
@@ -1069,14 +1070,14 @@ func (daemon *Daemon) ExportImage(names []string, outStream io.Writer) error {
 }
 
 // PushImage initiates a push operation on the repository named localName.
-func (daemon *Daemon) PushImage(ref reference.Named, metaHeaders map[string][]string, authConfig *types.AuthConfig, outStream io.Writer) error {
+func (daemon *Daemon) PushImage(ctx context.Context, ref reference.Named, metaHeaders map[string][]string, authConfig *types.AuthConfig, outStream io.Writer) error {
 	// Include a buffer so that slow client connections don't affect
 	// transfer performance.
 	progressChan := make(chan progress.Progress, 100)
 
 	writesDone := make(chan struct{})
 
-	ctx, cancelFunc := context.WithCancel(context.Background())
+	ctx, cancelFunc := context.WithCancel(ctx)
 
 	go func() {
 		writeDistributionProgress(cancelFunc, outStream, progressChan)
@@ -1164,6 +1165,7 @@ func (daemon *Daemon) LookupImage(name string) (*types.ImageInspect, error) {
 		Os:              img.OS,
 		Size:            size,
 		VirtualSize:     size, // TODO: field unused, deprecate
+		RootFS:          rootFSToAPIType(img.RootFS),
 	}
 
 	imageInspect.GraphDriver.Name = daemon.GraphDriverName()
@@ -1440,7 +1442,7 @@ func (daemon *Daemon) verifyContainerSettings(hostConfig *containertypes.HostCon
 		if config.WorkingDir != "" {
 			config.WorkingDir = filepath.FromSlash(config.WorkingDir) // Ensure in platform semantics
 			if !system.IsAbs(config.WorkingDir) {
-				return nil, fmt.Errorf("The working directory '%s' is invalid. It needs to be an absolute path.", config.WorkingDir)
+				return nil, fmt.Errorf("The working directory '%s' is invalid. It needs to be an absolute path", config.WorkingDir)
 			}
 		}
 
@@ -1498,20 +1500,20 @@ func configureVolumes(config *Config, rootUID, rootGID int) (*store.VolumeStore,
 	}
 
 	volumedrivers.Register(volumesDriver, volumesDriver.Name())
-	return store.New(), nil
+	return store.New(config.Root)
 }
 
 // AuthenticateToRegistry checks the validity of credentials in authConfig
-func (daemon *Daemon) AuthenticateToRegistry(authConfig *types.AuthConfig) (string, string, error) {
-	return daemon.RegistryService.Auth(authConfig, dockerversion.DockerUserAgent())
+func (daemon *Daemon) AuthenticateToRegistry(ctx context.Context, authConfig *types.AuthConfig) (string, string, error) {
+	return daemon.RegistryService.Auth(authConfig, dockerversion.DockerUserAgent(ctx))
 }
 
 // SearchRegistryForImages queries the registry for images matching
 // term. authConfig is used to login.
-func (daemon *Daemon) SearchRegistryForImages(term string,
+func (daemon *Daemon) SearchRegistryForImages(ctx context.Context, term string,
 	authConfig *types.AuthConfig,
 	headers map[string][]string) (*registrytypes.SearchResults, error) {
-	return daemon.RegistryService.Search(term, authConfig, dockerversion.DockerUserAgent(), headers)
+	return daemon.RegistryService.Search(term, authConfig, dockerversion.DockerUserAgent(ctx), headers)
 }
 
 // IsShuttingDown tells whether the daemon is shutting down or not
@@ -1590,8 +1592,9 @@ func (daemon *Daemon) initDiscovery(config *Config) error {
 
 // Reload reads configuration changes and modifies the
 // daemon according to those changes.
-// This are the settings that Reload changes:
+// These are the settings that Reload changes:
 // - Daemon labels.
+// - Daemon debug log level.
 // - Cluster discovery (reconfigure and restart).
 func (daemon *Daemon) Reload(config *Config) error {
 	daemon.configStore.reloadLock.Lock()

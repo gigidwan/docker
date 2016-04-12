@@ -69,9 +69,6 @@ type devInfo struct {
 	Deleted       bool   `json:"deleted"`
 	devices       *DeviceSet
 
-	mountCount int
-	mountPath  string
-
 	// The global DeviceSet lock guarantees that we serialize all
 	// the calls to libdevmapper (which is not threadsafe), but we
 	// sometimes release that lock while sleeping. In that case
@@ -842,7 +839,7 @@ func (devices *DeviceSet) createRegisterDevice(hash string) (*devInfo, error) {
 	return info, nil
 }
 
-func (devices *DeviceSet) createRegisterSnapDevice(hash string, baseInfo *devInfo) error {
+func (devices *DeviceSet) createRegisterSnapDevice(hash string, baseInfo *devInfo, size uint64) error {
 	if err := devices.poolHasFreeSpace(); err != nil {
 		return err
 	}
@@ -881,7 +878,7 @@ func (devices *DeviceSet) createRegisterSnapDevice(hash string, baseInfo *devInf
 		break
 	}
 
-	if _, err := devices.registerDevice(deviceID, hash, baseInfo.Size, devices.OpenTransactionID); err != nil {
+	if _, err := devices.registerDevice(deviceID, hash, size, devices.OpenTransactionID); err != nil {
 		devicemapper.DeleteDevice(devices.getPoolDevName(), deviceID)
 		devices.markDeviceIDFree(deviceID)
 		logrus.Debugf("devmapper: Error registering device: %s", err)
@@ -1833,7 +1830,7 @@ func (devices *DeviceSet) initDevmapper(doInit bool) error {
 }
 
 // AddDevice adds a device and registers in the hash.
-func (devices *DeviceSet) AddDevice(hash, baseHash string) error {
+func (devices *DeviceSet) AddDevice(hash, baseHash string, storageOpt map[string]string) error {
 	logrus.Debugf("devmapper: AddDevice(hash=%s basehash=%s)", hash, baseHash)
 	defer logrus.Debugf("devmapper: AddDevice(hash=%s basehash=%s) END", hash, baseHash)
 
@@ -1859,8 +1856,54 @@ func (devices *DeviceSet) AddDevice(hash, baseHash string) error {
 		return fmt.Errorf("devmapper: device %s already exists. Deleted=%v", hash, info.Deleted)
 	}
 
-	if err := devices.createRegisterSnapDevice(hash, baseInfo); err != nil {
+	devinfo := &devInfo{}
+
+	if err := devices.parseStorageOpt(storageOpt, devinfo); err != nil {
 		return err
+	}
+
+	if devinfo.Size == 0 {
+		devinfo.Size = baseInfo.Size
+	}
+
+	if devinfo.Size < baseInfo.Size {
+		return fmt.Errorf("devmapper: Container size cannot be smaller than %s", units.HumanSize(float64(baseInfo.Size)))
+	}
+
+	if err := devices.createRegisterSnapDevice(hash, baseInfo, devinfo.Size); err != nil {
+		return err
+	}
+
+	// Grow the container rootfs.
+	if devinfo.Size > 0 {
+		info, err := devices.lookupDevice(hash)
+		if err != nil {
+			return err
+		}
+
+		if err := devices.growFS(info); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (devices *DeviceSet) parseStorageOpt(storageOpt map[string]string, devinfo *devInfo) error {
+
+	// Read size to change the block device size per container.
+	for key, val := range storageOpt {
+		key := strings.ToLower(key)
+		switch key {
+		case "size":
+			size, err := units.RAMInBytes(val)
+			if err != nil {
+				return err
+			}
+			devinfo.Size = uint64(size)
+		default:
+			return fmt.Errorf("Unknown option %s", key)
+		}
 	}
 
 	return nil
@@ -1991,13 +2034,6 @@ func (devices *DeviceSet) DeleteDevice(hash string, syncDelete bool) error {
 	devices.Lock()
 	defer devices.Unlock()
 
-	// If mountcount is not zero, that means devices is still in use
-	// or has not been Put() properly. Fail device deletion.
-
-	if info.mountCount != 0 {
-		return fmt.Errorf("devmapper: Can't delete device %v as it is still mounted. mntCount=%v", info.Hash, info.mountCount)
-	}
-
 	return devices.deleteDevice(info, syncDelete)
 }
 
@@ -2116,12 +2152,10 @@ func (devices *DeviceSet) cancelDeferredRemoval(info *devInfo) error {
 }
 
 // Shutdown shuts down the device by unmounting the root.
-func (devices *DeviceSet) Shutdown() error {
+func (devices *DeviceSet) Shutdown(home string) error {
 	logrus.Debugf("devmapper: [deviceset %s] Shutdown()", devices.devicePrefix)
 	logrus.Debugf("devmapper: Shutting down DeviceSet: %s", devices.root)
 	defer logrus.Debugf("devmapper: [deviceset %s] Shutdown() END", devices.devicePrefix)
-
-	var devs []*devInfo
 
 	// Stop deletion worker. This should start delivering new events to
 	// ticker channel. That means no new instance of cleanupDeletedDevice()
@@ -2139,29 +2173,45 @@ func (devices *DeviceSet) Shutdown() error {
 	// metadata. Hence save this early before trying to deactivate devices.
 	devices.saveDeviceSetMetaData()
 
-	for _, info := range devices.Devices {
-		devs = append(devs, info)
+	// ignore the error since it's just a best effort to not try to unmount something that's mounted
+	mounts, _ := mount.GetMounts()
+	mounted := make(map[string]bool, len(mounts))
+	for _, mnt := range mounts {
+		mounted[mnt.Mountpoint] = true
 	}
-	devices.Unlock()
 
-	for _, info := range devs {
-		info.lock.Lock()
-		if info.mountCount > 0 {
+	if err := filepath.Walk(path.Join(home, "mnt"), func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			return nil
+		}
+
+		if mounted[p] {
 			// We use MNT_DETACH here in case it is still busy in some running
 			// container. This means it'll go away from the global scope directly,
 			// and the device will be released when that container dies.
-			if err := syscall.Unmount(info.mountPath, syscall.MNT_DETACH); err != nil {
-				logrus.Debugf("devmapper: Shutdown unmounting %s, error: %s", info.mountPath, err)
+			if err := syscall.Unmount(p, syscall.MNT_DETACH); err != nil {
+				logrus.Debugf("devmapper: Shutdown unmounting %s, error: %s", p, err)
 			}
-
-			devices.Lock()
-			if err := devices.deactivateDevice(info); err != nil {
-				logrus.Debugf("devmapper: Shutdown deactivate %s , error: %s", info.Hash, err)
-			}
-			devices.Unlock()
 		}
-		info.lock.Unlock()
+
+		if devInfo, err := devices.lookupDevice(path.Base(p)); err != nil {
+			logrus.Debugf("devmapper: Shutdown lookup device %s, error: %s", path.Base(p), err)
+		} else {
+			if err := devices.deactivateDevice(devInfo); err != nil {
+				logrus.Debugf("devmapper: Shutdown deactivate %s , error: %s", devInfo.Hash, err)
+			}
+		}
+
+		return nil
+	}); err != nil && !os.IsNotExist(err) {
+		devices.Unlock()
+		return err
 	}
+
+	devices.Unlock()
 
 	info, _ := devices.lookupDeviceWithLock("")
 	if info != nil {
@@ -2202,15 +2252,6 @@ func (devices *DeviceSet) MountDevice(hash, path, mountLabel string) error {
 	devices.Lock()
 	defer devices.Unlock()
 
-	if info.mountCount > 0 {
-		if path != info.mountPath {
-			return fmt.Errorf("devmapper: Trying to mount devmapper device in multiple places (%s, %s)", info.mountPath, path)
-		}
-
-		info.mountCount++
-		return nil
-	}
-
 	if err := devices.activateDeviceIfNeeded(info, false); err != nil {
 		return fmt.Errorf("devmapper: Error activating devmapper device for '%s': %s", hash, err)
 	}
@@ -2234,9 +2275,6 @@ func (devices *DeviceSet) MountDevice(hash, path, mountLabel string) error {
 		return fmt.Errorf("devmapper: Error mounting '%s' on '%s': %s", info.DevName(), path, err)
 	}
 
-	info.mountCount = 1
-	info.mountPath = path
-
 	return nil
 }
 
@@ -2256,20 +2294,6 @@ func (devices *DeviceSet) UnmountDevice(hash, mountPath string) error {
 	devices.Lock()
 	defer devices.Unlock()
 
-	// If there are running containers when daemon crashes, during daemon
-	// restarting, it will kill running containers and will finally call
-	// Put() without calling Get(). So info.MountCount may become negative.
-	// if info.mountCount goes negative, we do the unmount and assign
-	// it to 0.
-
-	info.mountCount--
-	if info.mountCount > 0 {
-		return nil
-	} else if info.mountCount < 0 {
-		logrus.Warnf("devmapper: Mount count of device went negative. Put() called without matching Get(). Resetting count to 0")
-		info.mountCount = 0
-	}
-
 	logrus.Debugf("devmapper: Unmount(%s)", mountPath)
 	if err := syscall.Unmount(mountPath, syscall.MNT_DETACH); err != nil {
 		return err
@@ -2279,8 +2303,6 @@ func (devices *DeviceSet) UnmountDevice(hash, mountPath string) error {
 	if err := devices.deactivateDevice(info); err != nil {
 		return err
 	}
-
-	info.mountPath = ""
 
 	return nil
 }

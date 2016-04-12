@@ -79,6 +79,7 @@ func (clnt *client) AddProcess(containerID, processFriendlyName string, specp Pr
 		ApparmorProfile: sp.ApparmorProfile,
 		SelinuxLabel:    sp.SelinuxLabel,
 		NoNewPrivileges: sp.NoNewPrivileges,
+		Rlimits:         convertRlimits(sp.Rlimits),
 	}
 
 	iopipe, err := p.openFifos(sp.Terminal)
@@ -297,6 +298,12 @@ func (clnt *client) GetPidsForContainer(containerID string) ([]int, error) {
 		pids[i] = int(p)
 	}
 	return pids, nil
+}
+
+// Summary returns a summary of the processes running in a container.
+// This is a no-op on Linux.
+func (clnt *client) Summary(containerID string) ([]Summary, error) {
+	return nil, nil
 }
 
 func (clnt *client) getContainerdContainer(containerID string) (*containerd.Container, error) {

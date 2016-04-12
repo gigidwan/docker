@@ -13,11 +13,10 @@ import (
 	"github.com/docker/distribution/digest"
 	"github.com/docker/distribution/registry/api/errcode"
 	"github.com/docker/docker/api/server/httputils"
-	"github.com/docker/docker/builder/dockerfile"
+	"github.com/docker/docker/api/types/backend"
 	"github.com/docker/docker/pkg/ioutils"
 	"github.com/docker/docker/pkg/streamformatter"
 	"github.com/docker/docker/reference"
-	"github.com/docker/docker/runconfig"
 	"github.com/docker/engine-api/types"
 	"github.com/docker/engine-api/types/container"
 	"golang.org/x/net/context"
@@ -40,7 +39,7 @@ func (s *imageRouter) postCommit(ctx context.Context, w http.ResponseWriter, r *
 		pause = true
 	}
 
-	c, _, _, err := runconfig.DecodeContainerConfig(r.Body)
+	c, _, _, err := s.decoder.DecodeConfig(r.Body)
 	if err != nil && err != io.EOF { //Do not fail if body is empty.
 		return err
 	}
@@ -48,19 +47,17 @@ func (s *imageRouter) postCommit(ctx context.Context, w http.ResponseWriter, r *
 		c = &container.Config{}
 	}
 
-	newConfig, err := dockerfile.BuildFromConfig(c, r.Form["changes"])
-	if err != nil {
-		return err
-	}
-
-	commitCfg := &types.ContainerCommitConfig{
-		Pause:        pause,
-		Repo:         r.Form.Get("repo"),
-		Tag:          r.Form.Get("tag"),
-		Author:       r.Form.Get("author"),
-		Comment:      r.Form.Get("comment"),
-		Config:       newConfig,
-		MergeConfigs: true,
+	commitCfg := &backend.ContainerCommitConfig{
+		ContainerCommitConfig: types.ContainerCommitConfig{
+			Pause:        pause,
+			Repo:         r.Form.Get("repo"),
+			Tag:          r.Form.Get("tag"),
+			Author:       r.Form.Get("author"),
+			Comment:      r.Form.Get("comment"),
+			Config:       c,
+			MergeConfigs: true,
+		},
+		Changes: r.Form["changes"],
 	}
 
 	imgID, err := s.backend.Commit(cname, commitCfg)
@@ -129,7 +126,7 @@ func (s *imageRouter) postImagesCreate(ctx context.Context, w http.ResponseWrite
 					}
 				}
 
-				err = s.backend.PullImage(ref, metaHeaders, authConfig, output)
+				err = s.backend.PullImage(ctx, ref, metaHeaders, authConfig, output)
 			}
 		}
 		// Check the error from pulling an image to make sure the request
@@ -160,17 +157,10 @@ func (s *imageRouter) postImagesCreate(ctx context.Context, w http.ResponseWrite
 		}
 
 		src := r.Form.Get("fromSrc")
-
 		// 'err' MUST NOT be defined within this block, we need any error
 		// generated from the download to be available to the output
 		// stream processing below
-		var newConfig *container.Config
-		newConfig, err = dockerfile.BuildFromConfig(&container.Config{}, r.Form["changes"])
-		if err != nil {
-			return err
-		}
-
-		err = s.backend.ImportImage(src, newRef, message, r.Body, output, newConfig)
+		err = s.backend.ImportImage(src, newRef, message, r.Body, output, r.Form["changes"])
 	}
 	if err != nil {
 		if !output.Flushed() {
@@ -228,7 +218,7 @@ func (s *imageRouter) postImagesPush(ctx context.Context, w http.ResponseWriter,
 
 	w.Header().Set("Content-Type", "application/json")
 
-	if err := s.backend.PushImage(ref, metaHeaders, authConfig, output); err != nil {
+	if err := s.backend.PushImage(ctx, ref, metaHeaders, authConfig, output); err != nil {
 		if !output.Flushed() {
 			return err
 		}
@@ -373,7 +363,7 @@ func (s *imageRouter) getImagesSearch(ctx context.Context, w http.ResponseWriter
 			headers[k] = v
 		}
 	}
-	query, err := s.backend.SearchRegistryForImages(r.Form.Get("term"), config, headers)
+	query, err := s.backend.SearchRegistryForImages(ctx, r.Form.Get("term"), config, headers)
 	if err != nil {
 		return err
 	}

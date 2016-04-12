@@ -341,6 +341,22 @@ func (s *DockerNetworkSuite) TestDockerNetworkCreateDelete(c *check.C) {
 	assertNwNotAvailable(c, "test")
 }
 
+func (s *DockerNetworkSuite) TestDockerNetworkCreateLabel(c *check.C) {
+	testNet := "testnetcreatelabel"
+	testLabel := "foo"
+	testValue := "bar"
+
+	dockerCmd(c, "network", "create", "--label", testLabel+"="+testValue, testNet)
+	assertNwIsAvailable(c, testNet)
+
+	out, _, err := dockerCmdWithError("network", "inspect", "--format='{{ .Labels."+testLabel+" }}'", testNet)
+	c.Assert(err, check.IsNil)
+	c.Assert(strings.TrimSpace(out), check.Equals, testValue)
+
+	dockerCmd(c, "network", "rm", testNet)
+	assertNwNotAvailable(c, testNet)
+}
+
 func (s *DockerSuite) TestDockerNetworkDeleteNotExists(c *check.C) {
 	out, _, err := dockerCmdWithError("network", "rm", "test")
 	c.Assert(err, checker.NotNil, check.Commentf("%v", out))
@@ -1128,10 +1144,10 @@ func (s *DockerNetworkSuite) TestDockerNetworkConnectDisconnectToStoppedContaine
 
 func (s *DockerNetworkSuite) TestDockerNetworkConnectPreferredIP(c *check.C) {
 	// create two networks
-	dockerCmd(c, "network", "create", "--subnet=172.28.0.0/16", "--subnet=2001:db8:1234::/64", "n0")
+	dockerCmd(c, "network", "create", "--ipv6", "--subnet=172.28.0.0/16", "--subnet=2001:db8:1234::/64", "n0")
 	assertNwIsAvailable(c, "n0")
 
-	dockerCmd(c, "network", "create", "--subnet=172.30.0.0/16", "--ip-range=172.30.5.0/24", "--subnet=2001:db8:abcd::/64", "--ip-range=2001:db8:abcd::/80", "n1")
+	dockerCmd(c, "network", "create", "--ipv6", "--subnet=172.30.0.0/16", "--ip-range=172.30.5.0/24", "--subnet=2001:db8:abcd::/64", "--ip-range=2001:db8:abcd::/80", "n1")
 	assertNwIsAvailable(c, "n1")
 
 	// run a container on first network specifying the ip addresses
@@ -1167,7 +1183,7 @@ func (s *DockerNetworkSuite) TestDockerNetworkConnectPreferredIPStoppedContainer
 	dockerCmd(c, "create", "--name", "c0", "busybox", "top")
 
 	// create a network
-	dockerCmd(c, "network", "create", "--subnet=172.30.0.0/16", "--subnet=2001:db8:abcd::/64", "n0")
+	dockerCmd(c, "network", "create", "--ipv6", "--subnet=172.30.0.0/16", "--subnet=2001:db8:abcd::/64", "n0")
 	assertNwIsAvailable(c, "n0")
 
 	// connect the container to the network specifying an ip addresses
@@ -1435,4 +1451,17 @@ func (s *DockerSuite) TestDockerNetworkInternalMode(c *check.C) {
 	c.Assert(out, checker.Contains, "ping: bad address")
 	_, _, err = dockerCmdWithError("exec", "second", "ping", "-c", "1", "first")
 	c.Assert(err, check.IsNil)
+}
+
+// Test for #21401
+func (s *DockerNetworkSuite) TestDockerNetworkCreateDeleteSpecialCharacters(c *check.C) {
+	dockerCmd(c, "network", "create", "test@#$")
+	assertNwIsAvailable(c, "test@#$")
+	dockerCmd(c, "network", "rm", "test@#$")
+	assertNwNotAvailable(c, "test@#$")
+
+	dockerCmd(c, "network", "create", "kiwl$%^")
+	assertNwIsAvailable(c, "kiwl$%^")
+	dockerCmd(c, "network", "rm", "kiwl$%^")
+	assertNwNotAvailable(c, "kiwl$%^")
 }

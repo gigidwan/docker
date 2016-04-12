@@ -33,25 +33,32 @@ var flatOptions = map[string]bool{
 
 // LogConfig represents the default log configuration.
 // It includes json tags to deserialize configuration from a file
-// using the same names that the flags in the command line uses.
+// using the same names that the flags in the command line use.
 type LogConfig struct {
 	Type   string            `json:"log-driver,omitempty"`
 	Config map[string]string `json:"log-opts,omitempty"`
 }
 
+// commonBridgeConfig stores all the platform-common bridge driver specific
+// configuration.
+type commonBridgeConfig struct {
+	Iface     string `json:"bridge,omitempty"`
+	FixedCIDR string `json:"fixed-cidr,omitempty"`
+}
+
 // CommonTLSOptions defines TLS configuration for the daemon server.
 // It includes json tags to deserialize configuration from a file
-// using the same names that the flags in the command line uses.
+// using the same names that the flags in the command line use.
 type CommonTLSOptions struct {
 	CAFile   string `json:"tlscacert,omitempty"`
 	CertFile string `json:"tlscert,omitempty"`
 	KeyFile  string `json:"tlskey,omitempty"`
 }
 
-// CommonConfig defines the configuration of a docker daemon which are
+// CommonConfig defines the configuration of a docker daemon which is
 // common across platforms.
 // It includes json tags to deserialize configuration from a file
-// using the same names that the flags in the command line uses.
+// using the same names that the flags in the command line use.
 type CommonConfig struct {
 	AuthorizationPlugins []string            `json:"authorization-plugins,omitempty"` // AuthorizationPlugins holds list of authorization plugins
 	AutoRestart          bool                `json:"-"`
@@ -61,7 +68,6 @@ type CommonConfig struct {
 	DNSOptions           []string            `json:"dns-opts,omitempty"`
 	DNSSearch            []string            `json:"dns-search,omitempty"`
 	ExecOptions          []string            `json:"exec-opts,omitempty"`
-	ExecRoot             string              `json:"exec-root,omitempty"`
 	GraphDriver          string              `json:"storage-driver,omitempty"`
 	GraphOptions         []string            `json:"storage-opts,omitempty"`
 	Labels               []string            `json:"labels,omitempty"`
@@ -112,10 +118,9 @@ func (config *Config) InstallCommonFlags(cmd *flag.FlagSet, usageFn func(string)
 
 	cmd.Var(opts.NewNamedListOptsRef("storage-opts", &config.GraphOptions, nil), []string{"-storage-opt"}, usageFn("Set storage driver options"))
 	cmd.Var(opts.NewNamedListOptsRef("authorization-plugins", &config.AuthorizationPlugins, nil), []string{"-authorization-plugin"}, usageFn("List authorization plugins in order from first evaluator to last"))
-	cmd.Var(opts.NewNamedListOptsRef("exec-opts", &config.ExecOptions, nil), []string{"-exec-opt"}, usageFn("Set exec driver options"))
+	cmd.Var(opts.NewNamedListOptsRef("exec-opts", &config.ExecOptions, nil), []string{"-exec-opt"}, usageFn("Set runtime execution options"))
 	cmd.StringVar(&config.Pidfile, []string{"p", "-pidfile"}, defaultPidFile, usageFn("Path to use for daemon PID file"))
 	cmd.StringVar(&config.Root, []string{"g", "-graph"}, defaultGraph, usageFn("Root of the Docker runtime"))
-	cmd.StringVar(&config.ExecRoot, []string{"-exec-root"}, defaultExecRoot, usageFn("Root of the Docker execdriver"))
 	cmd.BoolVar(&config.AutoRestart, []string{"#r", "#-restart"}, true, usageFn("--restart on the daemon has been deprecated in favor of --restart policies on docker run"))
 	cmd.StringVar(&config.GraphDriver, []string{"s", "-storage-driver"}, "", usageFn("Storage driver to use"))
 	cmd.IntVar(&config.Mtu, []string{"#mtu", "-mtu"}, 0, usageFn("Set the containers network MTU"))

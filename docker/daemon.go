@@ -22,7 +22,6 @@ import (
 	"github.com/docker/docker/api/server/router/network"
 	systemrouter "github.com/docker/docker/api/server/router/system"
 	"github.com/docker/docker/api/server/router/volume"
-	"github.com/docker/docker/builder/dockerfile"
 	"github.com/docker/docker/cli"
 	"github.com/docker/docker/cliconfig"
 	"github.com/docker/docker/daemon"
@@ -37,6 +36,7 @@ import (
 	"github.com/docker/docker/pkg/signal"
 	"github.com/docker/docker/pkg/system"
 	"github.com/docker/docker/registry"
+	"github.com/docker/docker/runconfig"
 	"github.com/docker/docker/utils"
 	"github.com/docker/go-connections/tlsconfig"
 )
@@ -265,8 +265,7 @@ func (cli *DaemonCli) CmdDaemon(args ...string) error {
 	cli.TrustKeyPath = commonFlags.TrustKey
 
 	registryService := registry.NewService(cli.Config.ServiceOptions)
-
-	containerdRemote, err := libcontainerd.New(filepath.Join(cli.Config.ExecRoot, "libcontainerd"), cli.getPlatformRemoteOptions()...)
+	containerdRemote, err := libcontainerd.New(cli.getLibcontainerdRoot(), cli.getPlatformRemoteOptions()...)
 	if err != nil {
 		logrus.Fatal(err)
 	}
@@ -406,12 +405,14 @@ func loadDaemonCliConfig(config *daemon.Config, daemonFlags *flag.FlagSet, commo
 }
 
 func initRouter(s *apiserver.Server, d *daemon.Daemon) {
+	decoder := runconfig.ContainerDecoder{}
+
 	routers := []router.Router{
-		container.NewRouter(d),
-		image.NewRouter(d),
+		container.NewRouter(d, decoder),
+		image.NewRouter(d, decoder),
 		systemrouter.NewRouter(d),
 		volume.NewRouter(d),
-		build.NewRouter(dockerfile.NewBuildManager(d)),
+		build.NewRouter(d),
 	}
 	if d.NetworkControllerEnabled() {
 		routers = append(routers, network.NewRouter(d))

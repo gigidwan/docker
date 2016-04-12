@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/Sirupsen/logrus"
@@ -74,5 +75,15 @@ func (cli *DaemonCli) getPlatformRemoteOptions() []libcontainerd.RemoteOption {
 	} else {
 		opts = append(opts, libcontainerd.WithStartDaemon(true))
 	}
+	if daemon.UsingSystemd(cli.Config) {
+		args := []string{"--systemd-cgroup=true"}
+		opts = append(opts, libcontainerd.WithRuntimeArgs(args))
+	}
 	return opts
+}
+
+// getLibcontainerdRoot gets the root directory for libcontainerd/containerd to
+// store their state.
+func (cli *DaemonCli) getLibcontainerdRoot() string {
+	return filepath.Join(cli.Config.ExecRoot, "libcontainerd")
 }

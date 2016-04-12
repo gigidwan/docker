@@ -6,6 +6,7 @@ package dockerfile
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -16,9 +17,11 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Sirupsen/logrus"
+	"github.com/docker/docker/api/types/backend"
 	"github.com/docker/docker/builder"
 	"github.com/docker/docker/builder/dockerfile/parser"
 	"github.com/docker/docker/pkg/archive"
@@ -37,6 +40,19 @@ import (
 	"github.com/docker/engine-api/types/strslice"
 )
 
+func (b *Builder) addLabels() {
+	// merge labels
+	if len(b.options.Labels) > 0 {
+		logrus.Debugf("[BUILDER] setting labels %v", b.options.Labels)
+		if b.runConfig.Labels == nil {
+			b.runConfig.Labels = make(map[string]string)
+		}
+		for kL, vL := range b.options.Labels {
+			b.runConfig.Labels[kL] = vL
+		}
+	}
+}
+
 func (b *Builder) commit(id string, autoCmd strslice.StrSlice, comment string) error {
 	if b.disableCommit {
 		return nil
@@ -45,6 +61,7 @@ func (b *Builder) commit(id string, autoCmd strslice.StrSlice, comment string) e
 		return fmt.Errorf("Please provide a source image with `from` prior to commit")
 	}
 	b.runConfig.Image = b.image
+
 	if id == "" {
 		cmd := b.runConfig.Cmd
 		if runtime.GOOS != "windows" {
@@ -70,10 +87,12 @@ func (b *Builder) commit(id string, autoCmd strslice.StrSlice, comment string) e
 	autoConfig := *b.runConfig
 	autoConfig.Cmd = autoCmd
 
-	commitCfg := &types.ContainerCommitConfig{
-		Author: b.maintainer,
-		Pause:  true,
-		Config: &autoConfig,
+	commitCfg := &backend.ContainerCommitConfig{
+		ContainerCommitConfig: types.ContainerCommitConfig{
+			Author: b.maintainer,
+			Pause:  true,
+			Config: &autoConfig,
+		},
 	}
 
 	// Commit the container
@@ -81,6 +100,7 @@ func (b *Builder) commit(id string, autoCmd strslice.StrSlice, comment string) e
 	if err != nil {
 		return err
 	}
+
 	b.image = imageID
 	return nil
 }
@@ -398,7 +418,20 @@ func (b *Builder) processImageFrom(img builder.Image) error {
 		b.image = img.ImageID()
 
 		if img.RunConfig() != nil {
-			b.runConfig = img.RunConfig()
+			imgConfig := *img.RunConfig()
+			// inherit runConfig labels from the current
+			// state if they've been set already.
+			// Ensures that images with only a FROM
+			// get the labels populated properly.
+			if b.runConfig.Labels != nil {
+				if imgConfig.Labels == nil {
+					imgConfig.Labels = make(map[string]string)
+				}
+				for k, v := range b.runConfig.Labels {
+					imgConfig.Labels[k] = v
+				}
+			}
+			b.runConfig = &imgConfig
 		}
 	}
 
@@ -535,6 +568,8 @@ func (b *Builder) create() (string, error) {
 	return c.ID, nil
 }
 
+var errCancelled = errors.New("build cancelled")
+
 func (b *Builder) run(cID string) (err error) {
 	errCh := make(chan error)
 	go func() {
@@ -542,14 +577,19 @@ func (b *Builder) run(cID string) (err error) {
 	}()
 
 	finished := make(chan struct{})
-	defer close(finished)
+	var once sync.Once
+	finish := func() { close(finished) }
+	cancelErrCh := make(chan error, 1)
+	defer once.Do(finish)
 	go func() {
 		select {
-		case <-b.cancelled:
+		case <-b.clientCtx.Done():
 			logrus.Debugln("Build cancelled, killing and removing container:", cID)
 			b.docker.ContainerKill(cID, 0)
 			b.removeContainer(cID)
+			cancelErrCh <- errCancelled
 		case <-finished:
+			cancelErrCh <- nil
 		}
 	}()
 
@@ -569,8 +609,8 @@ func (b *Builder) run(cID string) (err error) {
 			Code:    ret,
 		}
 	}
-
-	return nil
+	once.Do(finish)
+	return <-cancelErrCh
 }
 
 func (b *Builder) removeContainer(c string) error {

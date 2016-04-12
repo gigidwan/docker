@@ -23,14 +23,13 @@ type State struct {
 type Winsize struct {
 	Height uint16
 	Width  uint16
-	x      uint16
-	y      uint16
 }
 
 const (
 	// https://msdn.microsoft.com/en-us/library/windows/desktop/ms683167(v=vs.85).aspx
 	enableVirtualTerminalInput      = 0x0200
 	enableVirtualTerminalProcessing = 0x0004
+	disableNewlineAutoReturn        = 0x0008
 )
 
 // usingNativeConsole is true if we are using the Windows native console
@@ -146,8 +145,14 @@ func probeNativeConsole(state State) error {
 
 // enableNativeConsole turns on native console mode
 func enableNativeConsole(state State) error {
-	if err := winterm.SetConsoleMode(uintptr(state.outHandle), state.outMode|enableVirtualTerminalProcessing); err != nil {
-		return err
+	// First attempt both enableVirtualTerminalProcessing and disableNewlineAutoReturn
+	if err := winterm.SetConsoleMode(uintptr(state.outHandle),
+		state.outMode|(enableVirtualTerminalProcessing|disableNewlineAutoReturn)); err != nil {
+
+		// That may fail, so fallback to trying just enableVirtualTerminalProcessing
+		if err := winterm.SetConsoleMode(uintptr(state.outHandle), state.outMode|enableVirtualTerminalProcessing); err != nil {
+			return err
+		}
 	}
 
 	if err := winterm.SetConsoleMode(uintptr(state.inHandle), state.inMode|enableVirtualTerminalInput); err != nil {
@@ -187,8 +192,7 @@ func GetWinsize(fd uintptr) (*Winsize, error) {
 	winsize := &Winsize{
 		Width:  uint16(info.Window.Right - info.Window.Left + 1),
 		Height: uint16(info.Window.Bottom - info.Window.Top + 1),
-		x:      0,
-		y:      0}
+	}
 
 	return winsize, nil
 }

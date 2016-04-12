@@ -74,8 +74,8 @@ func (daemon *Daemon) create(params types.ContainerCreateConfig) (retC *containe
 	}
 	defer func() {
 		if retErr != nil {
-			if err := daemon.ContainerRm(container.ID, &types.ContainerRmConfig{ForceRemove: true}); err != nil {
-				logrus.Errorf("Clean up Error! Cannot destroy container %s: %v", container.ID, err)
+			if err := daemon.cleanupContainer(container, true); err != nil {
+				logrus.Errorf("failed to cleanup container on create error: %v", err)
 			}
 		}
 	}()
@@ -84,14 +84,13 @@ func (daemon *Daemon) create(params types.ContainerCreateConfig) (retC *containe
 		return nil, err
 	}
 
+	container.HostConfig.StorageOpt = params.HostConfig.StorageOpt
+
 	// Set RWLayer for container after mount labels have been set
 	if err := daemon.setRWLayer(container); err != nil {
 		return nil, err
 	}
 
-	if err := daemon.Register(container); err != nil {
-		return nil, err
-	}
 	rootUID, rootGID, err := idtools.GetRootUIDGID(daemon.uidMaps, daemon.gidMaps)
 	if err != nil {
 		return nil, err
@@ -124,8 +123,11 @@ func (daemon *Daemon) create(params types.ContainerCreateConfig) (retC *containe
 		return nil, err
 	}
 
-	if err := container.ToDiskLocking(); err != nil {
+	if err := container.ToDisk(); err != nil {
 		logrus.Errorf("Error saving new container to disk: %v", err)
+		return nil, err
+	}
+	if err := daemon.Register(container); err != nil {
 		return nil, err
 	}
 	daemon.LogContainerEvent(container, "create")
@@ -156,7 +158,7 @@ func (daemon *Daemon) setRWLayer(container *container.Container) error {
 		}
 		layerID = img.RootFS.ChainID()
 	}
-	rwLayer, err := daemon.layerStore.CreateRWLayer(container.ID, layerID, container.MountLabel, daemon.setupInitLayer)
+	rwLayer, err := daemon.layerStore.CreateRWLayer(container.ID, layerID, container.MountLabel, daemon.setupInitLayer, container.HostConfig.StorageOpt)
 	if err != nil {
 		return err
 	}
@@ -167,12 +169,12 @@ func (daemon *Daemon) setRWLayer(container *container.Container) error {
 
 // VolumeCreate creates a volume with the specified name, driver, and opts
 // This is called directly from the remote API
-func (daemon *Daemon) VolumeCreate(name, driverName string, opts map[string]string) (*types.Volume, error) {
+func (daemon *Daemon) VolumeCreate(name, driverName string, opts, labels map[string]string) (*types.Volume, error) {
 	if name == "" {
 		name = stringid.GenerateNonCryptoID()
 	}
 
-	v, err := daemon.volumes.Create(name, driverName, opts)
+	v, err := daemon.volumes.Create(name, driverName, opts, labels)
 	if err != nil {
 		if volumestore.IsNameConflict(err) {
 			return nil, fmt.Errorf("A volume named %s already exists. Choose a different volume name.", name)

@@ -140,12 +140,12 @@ func (daemon *Daemon) containerStart(container *container.Container) (err error)
 			strings.Contains(err.Error(), "no such file or directory") ||
 			strings.Contains(err.Error(), "system cannot find the file specified") {
 			container.ExitCode = 127
-			err = fmt.Errorf("Container command '%s' not found or does not exist.", container.Path)
+			err = fmt.Errorf("Container command '%s' not found or does not exist", container.Path)
 		}
 		// set to 126 for container cmd can't be invoked errors
 		if strings.Contains(err.Error(), syscall.EACCES.Error()) {
 			container.ExitCode = 126
-			err = fmt.Errorf("Container command '%s' could not be invoked.", container.Path)
+			err = fmt.Errorf("Container command '%s' could not be invoked", container.Path)
 		}
 
 		container.Reset(false)
@@ -174,8 +174,10 @@ func (daemon *Daemon) Cleanup(container *container.Container) {
 		daemon.unregisterExecCommand(container, eConfig)
 	}
 
-	if err := container.UnmountVolumes(false, daemon.LogVolumeEvent); err != nil {
-		logrus.Warnf("%s cleanup: Failed to umount volumes: %v", container.ID, err)
+	if container.BaseFS != "" {
+		if err := container.UnmountVolumes(false, daemon.LogVolumeEvent); err != nil {
+			logrus.Warnf("%s cleanup: Failed to umount volumes: %v", container.ID, err)
+		}
 	}
 	container.CancelAttachContext()
 }

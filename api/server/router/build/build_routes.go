@@ -9,10 +9,11 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/Sirupsen/logrus"
 	"github.com/docker/docker/api/server/httputils"
-	"github.com/docker/docker/builder"
+	"github.com/docker/docker/api/types/backend"
 	"github.com/docker/docker/pkg/ioutils"
 	"github.com/docker/docker/pkg/progress"
 	"github.com/docker/docker/pkg/streamformatter"
@@ -82,7 +83,28 @@ func newImageBuildOptions(ctx context.Context, r *http.Request) (*types.ImageBui
 		}
 		options.BuildArgs = buildArgs
 	}
+	var labels = map[string]string{}
+	labelsJSON := r.FormValue("labels")
+	if labelsJSON != "" {
+		if err := json.NewDecoder(strings.NewReader(labelsJSON)).Decode(&labels); err != nil {
+			return nil, err
+		}
+		options.Labels = labels
+	}
+
 	return options, nil
+}
+
+type syncWriter struct {
+	w  io.Writer
+	mu sync.Mutex
+}
+
+func (s *syncWriter) Write(b []byte) (count int, err error) {
+	s.mu.Lock()
+	count, err = s.w.Write(b)
+	s.mu.Unlock()
+	return
 }
 
 func (br *buildRouter) postBuild(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
@@ -126,6 +148,7 @@ func (br *buildRouter) postBuild(ctx context.Context, w http.ResponseWriter, r *
 	if err != nil {
 		return errf(err)
 	}
+	buildOptions.AuthConfigs = authConfigs
 
 	remoteURL := r.FormValue("remote")
 
@@ -139,42 +162,22 @@ func (br *buildRouter) postBuild(ctx context.Context, w http.ResponseWriter, r *
 		return progress.NewProgressReader(in, progressOutput, r.ContentLength, "Downloading context", remoteURL)
 	}
 
-	var (
-		context        builder.ModifiableContext
-		dockerfileName string
-		out            io.Writer
-	)
-	context, dockerfileName, err = builder.DetectContextFromRemoteURL(r.Body, remoteURL, createProgressReader)
-	if err != nil {
-		return errf(err)
-	}
-	defer func() {
-		if err := context.Close(); err != nil {
-			logrus.Debugf("[BUILDER] failed to remove temporary context: %v", err)
-		}
-	}()
-	if len(dockerfileName) > 0 {
-		buildOptions.Dockerfile = dockerfileName
-	}
-
-	buildOptions.AuthConfigs = authConfigs
-
-	out = output
+	var out io.Writer = output
 	if buildOptions.SuppressOutput {
 		out = notVerboseBuffer
 	}
+	out = &syncWriter{w: out}
 	stdout := &streamformatter.StdoutFormatter{Writer: out, StreamFormatter: sf}
 	stderr := &streamformatter.StderrFormatter{Writer: out, StreamFormatter: sf}
 
-	closeNotifier := make(<-chan bool)
-	if notifier, ok := w.(http.CloseNotifier); ok {
-		closeNotifier = notifier.CloseNotify()
+	pg := backend.ProgressWriter{
+		Output:             out,
+		StdoutFormatter:    stdout,
+		StderrFormatter:    stderr,
+		ProgressReaderFunc: createProgressReader,
 	}
 
-	imgID, err := br.backend.Build(buildOptions,
-		builder.DockerIgnoreContext{ModifiableContext: context},
-		stdout, stderr, out,
-		closeNotifier)
+	imgID, err := br.backend.BuildFromContext(ctx, r.Body, remoteURL, buildOptions, pg)
 	if err != nil {
 		return errf(err)
 	}

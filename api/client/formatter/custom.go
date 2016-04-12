@@ -8,6 +8,7 @@ import (
 
 
 	"github.com/docker/docker/api"
+	"github.com/docker/docker/api/client/stat"
 	"github.com/docker/docker/pkg/stringid"
 	"github.com/docker/docker/pkg/stringutils"
 	"github.com/docker/engine-api/types"
@@ -53,8 +54,7 @@ type containerContext struct {
 type containerStatsContext struct {
 	baseSubContext
 	trunc bool
-//	cli client.APIClient
-	s     types.ContainerStats
+	s     stat.ContainerStats
 }
 
 func (c *containerContext) ID() string {
@@ -320,4 +320,3 @@ func stripNamePrefix(ss []string) []string {
 
 	return ss
 }
-

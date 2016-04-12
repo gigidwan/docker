@@ -11,12 +11,13 @@ import (
 	"github.com/docker/docker/api/client/formatter"
 	"github.com/docker/engine-api/client"
 	"github.com/docker/engine-api/types"
+	"github.com/docker/docker/api/client/stat"
 //	"github.com/docker/go-units"
 	"golang.org/x/net/context"
 )
 
 type containerStats struct {
-	types.ContainerStats
+	cs stat.ContainerStats
 	mu               sync.RWMutex
 	err              error
 }
@@ -29,7 +30,7 @@ type stats struct {
 func (s *stats) add(cs *containerStats) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, exists := s.isKnownContainer(cs.ID); !exists {
+	if _, exists := s.isKnownContainer(cs.cs.ID); !exists {
 		s.cs = append(s.cs, cs)
 		return true
 	}
@@ -46,7 +47,7 @@ func (s *stats) remove(id string) {
 
 func (s *stats) isKnownContainer(cid string) (int, bool) {
 	for i, c := range s.cs {
-		if c.ID == cid {
+		if c.cs.ID == cid {
 			return i, true
 		}
 	}
@@ -69,7 +70,7 @@ func (s *containerStats) Collect(cli client.APIClient, streamStats bool, waitFir
 		}
 	}()
 
-	responseBody, err := cli.ContainerStats(context.Background(), s.ID, streamStats)
+	responseBody, err := cli.ContainerStats(context.Background(), s.cs.ID, streamStats)
 	if err != nil {
 		s.mu.Lock()
 		s.err = err
@@ -101,14 +102,14 @@ func (s *containerStats) Collect(cli client.APIClient, streamStats bool, waitFir
 			cpuPercent = calculateCPUPercent(previousCPU, previousSystem, v)
 			blkRead, blkWrite := calculateBlockIO(v.BlkioStats)
 			s.mu.Lock()
-			s.CPUPercentage = cpuPercent
-			s.Memory = float64(v.MemoryStats.Usage)
-			s.MemoryLimit = float64(v.MemoryStats.Limit)
-			s.MemoryPercentage = memPercent
-			s.NetworkRx, s.NetworkTx = calculateNetwork(v.Networks)
-			s.BlockRead = float64(blkRead)
-			s.BlockWrite = float64(blkWrite)
-			s.PidsCurrent = v.PidsStats.Current
+			s.cs.CPUPercentage = cpuPercent
+			s.cs.Memory = float64(v.MemoryStats.Usage)
+			s.cs.MemoryLimit = float64(v.MemoryStats.Limit)
+			s.cs.MemoryPercentage = memPercent
+			s.cs.NetworkRx, s.cs.NetworkTx = calculateNetwork(v.Networks)
+			s.cs.BlockRead = float64(blkRead)
+			s.cs.BlockWrite = float64(blkWrite)
+			s.cs.PidsCurrent = v.PidsStats.Current
 			s.mu.Unlock()
 			u <- nil
 			if !streamStats {
@@ -122,15 +123,15 @@ func (s *containerStats) Collect(cli client.APIClient, streamStats bool, waitFir
 			// zero out the values if we have not received an update within
 			// the specified duration.
 			s.mu.Lock()
-			s.CPUPercentage = 0
-			s.Memory = 0
-			s.MemoryPercentage = 0
-			s.MemoryLimit = 0
-			s.NetworkRx = 0
-			s.NetworkTx = 0
-			s.BlockRead = 0
-			s.BlockWrite = 0
-			s.PidsCurrent = 0
+			s.cs.CPUPercentage = 0
+			s.cs.Memory = 0
+			s.cs.MemoryPercentage = 0
+			s.cs.MemoryLimit = 0
+			s.cs.NetworkRx = 0
+			s.cs.NetworkTx = 0
+			s.cs.BlockRead = 0
+			s.cs.BlockWrite = 0
+			s.cs.PidsCurrent = 0
 			s.mu.Unlock()
 			// if this is the first stat you get, release WaitGroup
 			if !getFirst {
@@ -178,8 +179,8 @@ func (s *containerStats) Display(cli *DockerCli, format *string, trunc bool) err
 			Quiet:  false,
 			Trunc:  trunc,
 		},
-		ShowName: strings.ToLower(f) == "name",
-		Stats:    []types.ContainerStats{s.ContainerStats},
+		ShowName: strings.ToLower(f) == "names",
+		Stats:    []stat.ContainerStats{s.cs},
 		//Stats: []types.ContainerStats{s.Name, s.CPUPercentage, s.Memory, s.MemoryLimit, s.MemoryPercentage, s.NetworkRx, s.NetworkTx, s.BlockRead, s.BlockWrite, s.PidsCurrent},
 	}
 

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.7.0-rc.1 (2016-03-30)
+- Fixes https://github.com/docker/libnetwork/issues/985
+- Fixes https://github.com/docker/libnetwork/issues/945
+- Log time taken to set sandbox key
+- Limit number of concurrent DNS queries
+
+## 0.7.0-dev.10 (2016-03-21)
+- Add IPv6 service discovery (AAAA records) in embedded DNS server
+- Honor enableIPv6 flag in network create for the IP allocation
+- Avoid V6 queries in docker domain going to external nameservers
+
+## 0.7.0-dev.9 (2016-03-18)
+- Support labels on networks
+
 ## 0.7.0-dev.8 (2016-03-16)
 - Windows driver to respect user set MAC address.
 - Fix possible nil pointer reference in ServeDNS() with concurrent go routines.

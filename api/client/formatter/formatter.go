@@ -8,6 +8,7 @@ import (
 	"text/tabwriter"
 	"text/template"
 
+	"github.com/docker/docker/api/client/stat"
 	"github.com/docker/docker/reference"
 	"github.com/docker/docker/utils/templates"
 	"github.com/docker/engine-api/types"
@@ -109,7 +110,7 @@ type ContainerStatsContext struct {
 	Context
 	ShowName bool
 	// Container Stats
-	Stats []types.ContainerStats
+	Stats []stat.ContainerStats
 }
 
 // ImageContext contains image specific information required by the formater, encapsulate a Context struct.
@@ -177,7 +178,7 @@ func (ctx ContainerStatsContext) Write() {
 	case tableFormatKey:
 		ctx.Format = defaultContainerStatsTableFormat
 	case rawFormatKey:
-		ctx.Format = `container_id: {{.ID}}
+		ctx.Format = `container: {{.ID}}
 cpu: {{.Cpu}}
 mem_usage: {{.MemUsage}}
 mem: {{.Mem}}
@@ -195,7 +196,7 @@ pid: {{.Pid}}
 	ctx.preformat()
 
 	if ctx.table && ctx.ShowName {
-		ctx.finalFormat += "\t{{.Namee}}"
+		ctx.finalFormat += "\t{{.Name}}"
 	}
 
 	tmpl, err := ctx.parseFormat()

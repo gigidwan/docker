@@ -57,7 +57,7 @@ func NewV2Repository(ctx context.Context, repoInfo *registry.RepositoryInfo, end
 		DisableKeepAlives: true,
 	}
 
-	modifiers := registry.DockerHeaders(dockerversion.DockerUserAgent(), metaHeaders)
+	modifiers := registry.DockerHeaders(dockerversion.DockerUserAgent(ctx), metaHeaders)
 	authTransport := transport.NewTransport(base, modifiers...)
 
 	challengeManager, foundVersion, err := registry.PingV2Registry(endpoint, authTransport)

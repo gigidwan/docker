@@ -468,7 +468,11 @@ func dockerCmdWithError(args ...string) (string, int, error) {
 	if err := validateArgs(args...); err != nil {
 		return "", 0, err
 	}
-	return integration.DockerCmdWithError(dockerBinary, args...)
+	out, code, err := integration.DockerCmdWithError(dockerBinary, args...)
+	if err != nil {
+		err = fmt.Errorf("%v: %s", err, out)
+	}
+	return out, code, err
 }
 
 func dockerCmdWithStdoutStderr(c *check.C, args ...string) (string, string, int) {
@@ -884,6 +888,21 @@ func inspectMountPointJSON(j, destination string) (types.MountPoint, error) {
 	}
 
 	return *m, nil
+}
+
+func inspectImage(name, filter string) (string, error) {
+	args := []string{"inspect", "--type", "image"}
+	if filter != "" {
+		format := fmt.Sprintf("{{%s}}", filter)
+		args = append(args, "-f", format)
+	}
+	args = append(args, name)
+	inspectCmd := exec.Command(dockerBinary, args...)
+	out, exitCode, err := runCommandWithOutput(inspectCmd)
+	if err != nil || exitCode != 0 {
+		return "", fmt.Errorf("failed to inspect %s: %s", name, out)
+	}
+	return strings.TrimSpace(out), nil
 }
 
 func getIDByName(name string) (string, error) {

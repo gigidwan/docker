@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -54,6 +55,7 @@ func Parse(cmd *flag.FlagSet, args []string) (*container.Config, *container.Host
 		flCapDrop           = opts.NewListOpts(nil)
 		flGroupAdd          = opts.NewListOpts(nil)
 		flSecurityOpt       = opts.NewListOpts(nil)
+		flStorageOpt        = opts.NewListOpts(nil)
 		flLabelsFile        = opts.NewListOpts(nil)
 		flLoggingOpts       = opts.NewListOpts(nil)
 		flPrivileged        = cmd.Bool([]string{"-privileged"}, false, "Give extended privileges to this container")
@@ -123,6 +125,7 @@ func Parse(cmd *flag.FlagSet, args []string) (*container.Config, *container.Host
 	cmd.Var(&flCapDrop, []string{"-cap-drop"}, "Drop Linux capabilities")
 	cmd.Var(&flGroupAdd, []string{"-group-add"}, "Add additional groups to join")
 	cmd.Var(&flSecurityOpt, []string{"-security-opt"}, "Security Options")
+	cmd.Var(&flStorageOpt, []string{"-storage-opt"}, "Set storage driver options per container")
 	cmd.Var(flUlimits, []string{"-ulimit"}, "Ulimit options")
 	cmd.Var(&flLoggingOpts, []string{"-log-opt"}, "Log driver options")
 
@@ -240,6 +243,15 @@ func Parse(cmd *flag.FlagSet, args []string) (*container.Config, *container.Host
 	if *flEntrypoint != "" {
 		entrypoint = strslice.StrSlice{*flEntrypoint}
 	}
+	// Validate if the given hostname is RFC 1123 (https://tools.ietf.org/html/rfc1123) compliant.
+	hostname := *flHostname
+	if hostname != "" {
+		// Linux hostname is limited to HOST_NAME_MAX=64, not not including the terminating null byte.
+		matched, _ := regexp.MatchString("^(([[:alnum:]]|[[:alnum:]][[:alnum:]\\-]*[[:alnum:]])\\.)*([[:alnum:]]|[[:alnum:]][[:alnum:]\\-]*[[:alnum:]])$", hostname)
+		if len(hostname) > 64 || !matched {
+			return nil, nil, nil, cmd, fmt.Errorf("invalid hostname format for --hostname: %s", hostname)
+		}
+	}
 
 	ports, portBindings, err := nat.ParsePortSpecs(flPublish.GetAll())
 	if err != nil {
@@ -327,6 +339,11 @@ func Parse(cmd *flag.FlagSet, args []string) (*container.Config, *container.Host
 		return nil, nil, nil, cmd, err
 	}
 
+	storageOpts, err := parseStorageOpts(flStorageOpt.GetAll())
+	if err != nil {
+		return nil, nil, nil, cmd, err
+	}
+
 	resources := container.Resources{
 		CgroupParent:         *flCgroupParent,
 		Memory:               flMemory,
@@ -405,6 +422,7 @@ func Parse(cmd *flag.FlagSet, args []string) (*container.Config, *container.Host
 		GroupAdd:       flGroupAdd.GetAll(),
 		RestartPolicy:  restartPolicy,
 		SecurityOpt:    securityOpts,
+		StorageOpt:     storageOpts,
 		ReadonlyRootfs: *flReadonlyRootfs,
 		LogConfig:      container.LogConfig{Type: *flLoggingDriver, Config: loggingOpts},
 		VolumeDriver:   *flVolumeDriver,
@@ -519,6 +537,20 @@ func parseSecurityOpts(securityOpts []string) ([]string, error) {
 	}
 
 	return securityOpts, nil
+}
+
+// parse storage options per container into a map
+func parseStorageOpts(storageOpts []string) (map[string]string, error) {
+	m := make(map[string]string)
+	for _, option := range storageOpts {
+		if strings.Contains(option, "=") {
+			opt := strings.SplitN(option, "=", 2)
+			m[opt[0]] = opt[1]
+		} else {
+			return nil, fmt.Errorf("Invalid storage option.")
+		}
+	}
+	return m, nil
 }
 
 // ParseRestartPolicy returns the parsed policy or an error indicating what is incorrect
@@ -695,8 +727,12 @@ func validatePath(val string, validator func(string) bool) (string, error) {
 }
 
 // volumeSplitN splits raw into a maximum of n parts, separated by a separator colon.
-// A separator colon is the last `:` character in the regex `[/:\\]?[a-zA-Z]:` (note `\\` is `\` escaped).
-// This allows to correctly split strings such as `C:\foo:D:\:rw`.
+// A separator colon is the last `:` character in the regex `[:\\]?[a-zA-Z]:` (note `\\` is `\` escaped).
+// In Windows driver letter appears in two situations:
+// a. `^[a-zA-Z]:` (A colon followed  by `^[a-zA-Z]:` is OK as colon is the separator in volume option)
+// b. A string in the format like `\\?\C:\Windows\...` (UNC).
+// Therefore, a driver letter can only follow either a `:` or `\\`
+// This allows to correctly split strings such as `C:\foo:D:\:rw` or `/tmp/q:/foo`.
 func volumeSplitN(raw string, n int) []string {
 	var array []string
 	if len(raw) == 0 || raw[0] == ':' {
@@ -721,7 +757,8 @@ func volumeSplitN(raw string, n int) []string {
 		if (potentialDriveLetter >= 'A' && potentialDriveLetter <= 'Z') || (potentialDriveLetter >= 'a' && potentialDriveLetter <= 'z') {
 			if right > 1 {
 				beforePotentialDriveLetter := raw[right-2]
-				if beforePotentialDriveLetter != ':' && beforePotentialDriveLetter != '/' && beforePotentialDriveLetter != '\\' {
+				// Only `:` or `\\` are checked (`/` could fall into the case of `/tmp/q:/foo`)
+				if beforePotentialDriveLetter != ':' && beforePotentialDriveLetter != '\\' {
 					// e.g. `C:` is not preceded by any delimiter, therefore it was not a drive letter but a path ending with `C:`.
 					array = append(array, raw[left:right])
 					left = right + 1

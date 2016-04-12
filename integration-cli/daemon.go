@@ -142,8 +142,9 @@ func (d *Daemon) StartWithLogFile(out *os.File, providedArgs ...string) error {
 
 	args := append(d.GlobalFlags,
 		d.Command,
-		"--containerd", "/var/run/docker/libcontainerd/containerd.sock",
+		"--containerd", "/var/run/docker/libcontainerd/docker-containerd.sock",
 		"--graph", d.root,
+		"--exec-root", filepath.Join(d.folder, "exec-root"),
 		"--pidfile", fmt.Sprintf("%s/docker.pid", d.folder),
 		fmt.Sprintf("--userland-proxy=%t", d.userlandProxy),
 	)
@@ -233,6 +234,8 @@ func (d *Daemon) StartWithLogFile(out *os.File, providedArgs ...string) error {
 				return fmt.Errorf("[%s] error querying daemon for root directory: %v", d.id, err)
 			}
 			return nil
+		case <-d.wait:
+			return fmt.Errorf("[%s] Daemon exited during startup", d.id)
 		}
 	}
 }

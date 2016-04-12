@@ -108,7 +108,7 @@ func (d *Driver) GetMetadata(id string) (map[string]string, error) {
 
 // Cleanup unmounts a device.
 func (d *Driver) Cleanup() error {
-	err := d.DeviceSet.Shutdown()
+	err := d.DeviceSet.Shutdown(d.home)
 
 	if err2 := mount.Unmount(d.home); err == nil {
 		err = err2
@@ -118,8 +118,8 @@ func (d *Driver) Cleanup() error {
 }
 
 // Create adds a device with a given id and the parent.
-func (d *Driver) Create(id, parent, mountLabel string) error {
-	if err := d.DeviceSet.AddDevice(id, parent); err != nil {
+func (d *Driver) Create(id, parent, mountLabel string, storageOpt map[string]string) error {
+	if err := d.DeviceSet.AddDevice(id, parent, storageOpt); err != nil {
 		return err
 	}
 

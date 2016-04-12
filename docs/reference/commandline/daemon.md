@@ -21,19 +21,20 @@ weight = -1
       -b, --bridge=""                        Attach containers to a network bridge
       --bip=""                               Specify network bridge IP
       --cgroup-parent=                       Set parent cgroup for all containers
-      -D, --debug                            Enable debug mode
-      --default-gateway=""                   Container default gateway IPv4 address
-      --default-gateway-v6=""                Container default gateway IPv6 address
       --cluster-store=""                     URL of the distributed storage backend
       --cluster-advertise=""                 Address of the daemon instance on the cluster
       --cluster-store-opt=map[]              Set cluster options
       --config-file=/etc/docker/daemon.json  Daemon configuration file
+      --containerd                           Path to containerd socket
+      -D, --debug                            Enable debug mode
+      --default-gateway=""                   Container default gateway IPv4 address
+      --default-gateway-v6=""                Container default gateway IPv6 address
       --dns=[]                               DNS server to use
       --dns-opt=[]                           DNS options to use
       --dns-search=[]                        DNS search domains to use
       --default-ulimit=[]                    Set default ulimit settings for containers
-      --exec-opt=[]                          Set exec driver options
-      --exec-root="/var/run/docker"          Root of the Docker execdriver
+      --exec-opt=[]                          Set runtime execution options
+      --exec-root="/var/run/docker"          Root directory for execution state files
       --fixed-cidr=""                        IPv4 subnet for fixed IPs
       --fixed-cidr-v6=""                     IPv6 subnet for fixed IPs
       -G, --group="docker"                   Group for the unix socket
@@ -462,7 +463,7 @@ options for `zfs` start with `zfs`.
 
     Example use:
 
-        $ docker daemon --storage-opt dm.min_free_space_percent=10%
+        $ docker daemon --storage-opt dm.min_free_space=10%
 
 Currently supported options of `zfs`:
 
@@ -476,21 +477,24 @@ Currently supported options of `zfs`:
 
         $ docker daemon -s zfs --storage-opt zfs.fsname=zroot/docker
 
-## Docker execdriver option
+## Docker runtime execution options
 
-The Docker daemon uses a specifically built `libcontainer` execution driver as
-its interface to the Linux kernel `namespaces`, `cgroups`, and `SELinux`.
+The Docker daemon relies on a
+[OCI](https://github.com/opencontainers/specs) compliant runtime
+(invoked via the `containerd` daemon) as its interface to the Linux
+kernel `namespaces`, `cgroups`, and `SELinux`.
 
-## Options for the native execdriver
+## Options for the runtime
 
-You can configure the `native` (libcontainer) execdriver using options specified
+You can configure the runtime using options specified
 with the `--exec-opt` flag. All the flag's options have the `native` prefix. A
 single `native.cgroupdriver` option is available.
 
 The `native.cgroupdriver` option specifies the management of the container's
-cgroups. You can specify `cgroupfs` or `systemd`. If you specify `systemd` and
-it is not available, the system uses `cgroupfs`. If you omit the
+cgroups. You can specify only specify `cgroupfs` or `systemd`. If you specify
+`systemd` and it is not available, the system errors out. If you omit the
 `native.cgroupdriver` option,` cgroupfs` is used.
+
 This example sets the `cgroupdriver` to `systemd`:
 
     $ sudo docker daemon --exec-opt native.cgroupdriver=systemd
@@ -792,11 +796,9 @@ The following standard Docker features are currently incompatible when
 running a Docker daemon with user namespaces enabled:
 
  - sharing PID or NET namespaces with the host (`--pid=host` or `--net=host`)
- - sharing a network namespace with an existing container (`--net=container:*other*`)
- - sharing an IPC namespace with an existing container (`--ipc=container:*other*`)
  - A `--readonly` container filesystem (this is a Linux kernel restriction against remounting with modified flags of a currently mounted filesystem when inside a user namespace)
  - external (volume or graph) drivers which are unaware/incapable of using daemon user mappings
- - Using `--privileged` mode flag on `docker run`
+ - Using `--privileged` mode flag on `docker run` (unless also specifying `--userns=host`)
 
 In general, user namespaces are an advanced feature and will require
 coordination with other capabilities. For example, if volumes are mounted from

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Sirupsen/logrus"
 	"github.com/docker/docker/container"
 	"github.com/docker/docker/daemon/caps"
 	"github.com/docker/docker/libcontainerd"
@@ -78,6 +79,7 @@ func setResources(s *specs.Spec, r containertypes.Resources) error {
 func setDevices(s *specs.Spec, c *container.Container) error {
 	// Build lists of devices allowed and created within the container.
 	var devs []specs.Device
+	devPermissions := s.Linux.Resources.Devices
 	if c.HostConfig.Privileged {
 		hostDevices, err := devices.HostDevices()
 		if err != nil {
@@ -86,18 +88,26 @@ func setDevices(s *specs.Spec, c *container.Container) error {
 		for _, d := range hostDevices {
 			devs = append(devs, specDevice(d))
 		}
+		rwm := "rwm"
+		devPermissions = []specs.DeviceCgroup{
+			{
+				Allow:  true,
+				Access: &rwm,
+			},
+		}
 	} else {
 		for _, deviceMapping := range c.HostConfig.Devices {
-			d, err := getDevicesFromPath(deviceMapping)
+			d, dPermissions, err := getDevicesFromPath(deviceMapping)
 			if err != nil {
 				return err
 			}
-
 			devs = append(devs, d...)
+			devPermissions = append(devPermissions, dPermissions...)
 		}
 	}
 
 	s.Linux.Devices = append(s.Linux.Devices, devs...)
+	s.Linux.Resources.Devices = devPermissions
 	return nil
 }
 
@@ -230,6 +240,18 @@ func delNamespace(s *specs.Spec, nsType specs.NamespaceType) {
 }
 
 func setNamespaces(daemon *Daemon, s *specs.Spec, c *container.Container) error {
+	userNS := false
+	// user
+	if c.HostConfig.UsernsMode.IsPrivate() {
+		uidMap, gidMap := daemon.GetUIDGIDMaps()
+		if uidMap != nil {
+			userNS = true
+			ns := specs.Namespace{Type: "user"}
+			setNamespace(s, ns)
+			s.Linux.UIDMappings = specMapping(uidMap)
+			s.Linux.GIDMappings = specMapping(gidMap)
+		}
+	}
 	// network
 	if !c.Config.NetworkDisabled {
 		ns := specs.Namespace{Type: "network"}
@@ -240,6 +262,12 @@ func setNamespaces(daemon *Daemon, s *specs.Spec, c *container.Container) error 
 				return err
 			}
 			ns.Path = fmt.Sprintf("/proc/%d/ns/net", nc.State.GetPID())
+			if userNS {
+				// to share a net namespace, they must also share a user namespace
+				nsUser := specs.Namespace{Type: "user"}
+				nsUser.Path = fmt.Sprintf("/proc/%d/ns/user", nc.State.GetPID())
+				setNamespace(s, nsUser)
+			}
 		} else if c.HostConfig.NetworkMode.IsHost() {
 			ns.Path = c.NetworkSettings.SandboxKey
 		}
@@ -254,6 +282,12 @@ func setNamespaces(daemon *Daemon, s *specs.Spec, c *container.Container) error 
 		}
 		ns.Path = fmt.Sprintf("/proc/%d/ns/ipc", ic.State.GetPID())
 		setNamespace(s, ns)
+		if userNS {
+			// to share an IPC namespace, they must also share a user namespace
+			nsUser := specs.Namespace{Type: "user"}
+			nsUser.Path = fmt.Sprintf("/proc/%d/ns/user", ic.State.GetPID())
+			setNamespace(s, nsUser)
+		}
 	} else if c.HostConfig.IpcMode.IsHost() {
 		delNamespace(s, specs.NamespaceType("ipc"))
 	} else {
@@ -268,16 +302,6 @@ func setNamespaces(daemon *Daemon, s *specs.Spec, c *container.Container) error 
 	if c.HostConfig.UTSMode.IsHost() {
 		delNamespace(s, specs.NamespaceType("uts"))
 		s.Hostname = ""
-	}
-	// user
-	if c.HostConfig.UsernsMode.IsPrivate() {
-		uidMap, gidMap := daemon.GetUIDGIDMaps()
-		if uidMap != nil {
-			ns := specs.Namespace{Type: "user"}
-			setNamespace(s, ns)
-			s.Linux.UIDMappings = specMapping(uidMap)
-			s.Linux.GIDMappings = specMapping(gidMap)
-		}
 	}
 
 	return nil
@@ -560,16 +584,24 @@ func (daemon *Daemon) createSpec(c *container.Container) (*libcontainerd.Spec, e
 	}
 
 	var cgroupsPath string
+	scopePrefix := "docker"
+	parent := "/docker"
+	useSystemd := UsingSystemd(daemon.configStore)
+	if useSystemd {
+		parent = "system.slice"
+	}
+
 	if c.HostConfig.CgroupParent != "" {
-		cgroupsPath = filepath.Join(c.HostConfig.CgroupParent, c.ID)
+		parent = c.HostConfig.CgroupParent
+	} else if daemon.configStore.CgroupParent != "" {
+		parent = daemon.configStore.CgroupParent
+	}
+
+	if useSystemd {
+		cgroupsPath = parent + ":" + scopePrefix + ":" + c.ID
+		logrus.Debugf("createSpec: cgroupsPath: %s", cgroupsPath)
 	} else {
-		defaultCgroupParent := "/docker"
-		if daemon.configStore.CgroupParent != "" {
-			defaultCgroupParent = daemon.configStore.CgroupParent
-		} else if daemon.usingSystemd() {
-			defaultCgroupParent = "system.slice"
-		}
-		cgroupsPath = filepath.Join(defaultCgroupParent, c.ID)
+		cgroupsPath = filepath.Join(parent, c.ID)
 	}
 	s.Linux.CgroupsPath = &cgroupsPath
 
