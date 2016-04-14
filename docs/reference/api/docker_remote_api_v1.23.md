@@ -317,6 +317,17 @@ Create a container
              "CgroupParent": "",
              "VolumeDriver": "",
              "ShmSize": 67108864
+          },
+          "NetworkingConfig": {
+          "EndpointsConfig": {
+              "isolated_nw" : {
+                  "IPAMConfig": {
+                      "IPv4Address":"172.20.30.33",
+                      "IPv6Address":"2001:db8:abcd::3033"
+                  },
+                  "Links":["container_1", "container_2"],
+                  "Aliases":["server_x", "server_y"]
+              }
           }
       }
 
@@ -2744,10 +2755,7 @@ Status Codes:
 
 Query Parameters:
 
-- **filters** - JSON encoded value of the filters (a `map[string][]string`) to process on the volumes list. Available filters:
-  -   `name=<volume-name>` Matches all or part of a volume name.
-  -   `dangling=<boolean>` When set to `true` (or `1`), returns all volumes that are "dangling" (not in use by a container). When set to `false` (or `0`), only volumes that are in use by one or more containers are returned.
-  -   `driver=<volume-driver-name>` Matches all or part of a volume driver name.
+- **filters** - JSON encoded value of the filters (a `map[string][]string`) to process on the volumes list. There is one available filter: `dangling=true`
 
 Status Codes:
 
@@ -3005,13 +3013,19 @@ Content-Type: application/json
 {
   "Name":"isolated_nw",
   "Driver":"bridge",
-  "EnableIPv6": false,
+  "EnableIPv6": true,
   "IPAM":{
-    "Config":[{
-      "Subnet":"172.20.0.0/16",
-      "IPRange":"172.20.10.0/24",
-      "Gateway":"172.20.10.11"
-    }],
+    "Config":[
+       {
+          "Subnet":"172.20.0.0/16",
+          "IPRange":"172.20.10.0/24",
+          "Gateway":"172.20.10.11"
+        },
+        {
+          "Subnet":"2001:db8:abcd::/64",
+          "Gateway":"2001:db8:abcd::1011"
+        }
+    ],
     "Options": {
         "foo": "bar"
     }

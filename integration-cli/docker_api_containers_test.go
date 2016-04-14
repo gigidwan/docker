@@ -1231,7 +1231,7 @@ func (s *DockerSuite) TestContainerApiPostContainerStop(c *check.C) {
 	c.Assert(err, checker.IsNil)
 	// 204 No Content is expected, not 200
 	c.Assert(statusCode, checker.Equals, http.StatusNoContent)
-	c.Assert(waitInspect(containerID, "{{ .State.Running  }}", "false", 5*time.Second), checker.IsNil)
+	c.Assert(waitInspect(containerID, "{{ .State.Running  }}", "false", 60*time.Second), checker.IsNil)
 }
 
 // #14170
@@ -1462,7 +1462,7 @@ func (s *DockerSuite) TestPostContainersCreateShmSizeNegative(c *check.C) {
 	status, body, err := sockRequest("POST", "/containers/create", config)
 	c.Assert(err, check.IsNil)
 	c.Assert(status, check.Equals, http.StatusInternalServerError)
-	c.Assert(string(body), checker.Contains, "SHM size must be greater then 0")
+	c.Assert(string(body), checker.Contains, "SHM size must be greater than 0")
 }
 
 func (s *DockerSuite) TestPostContainersCreateShmSizeHostConfigOmitted(c *check.C) {

@@ -7,7 +7,7 @@ source 'hack/.vendor-helpers.sh'
 
 # the following lines are in sorted order, FYI
 clone git github.com/Azure/go-ansiterm 70b2c90b260171e829f1ebd7c17f600c11858dbe
-clone git github.com/Microsoft/hcsshim v0.2.0
+clone git github.com/Microsoft/hcsshim v0.2.1
 clone git github.com/Microsoft/go-winio v0.3.0
 clone git github.com/Sirupsen/logrus v0.9.0 # logrus is a common dependency among multiple deps
 clone git github.com/docker/libtrust 9cbd2a1374f46905c68a4eb3694a130610adc62a
@@ -49,7 +49,7 @@ clone git github.com/boltdb/bolt v1.2.0
 clone git github.com/miekg/dns 75e6e86cc601825c5dbcd4e0c209eab180997cd7
 
 # get graph and distribution packages
-clone git github.com/docker/distribution d06d6d3b093302c02a93153ac7b06ebc0ffd1793
+clone git github.com/docker/distribution 467fc068d88aa6610691b7f1a677271a3fac4aac
 clone git github.com/vbatts/tar-split v0.9.11
 
 # get desired notary commit, might also need to be updated in Dockerfile

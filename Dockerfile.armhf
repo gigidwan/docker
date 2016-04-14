@@ -65,6 +65,8 @@ RUN cd /usr/local/lvm2 \
 # see https://git.fedorahosted.org/cgit/lvm2.git/tree/INSTALL
 
 # Install Go
+# TODO Update to 1.5.4 once available, or build from source, as these builds
+# are marked "end of life", see http://dave.cheney.net/unofficial-arm-tarballs
 ENV GO_VERSION 1.5.3
 RUN curl -fsSL "http://dave.cheney.net/paste/go${GO_VERSION}.linux-arm.tar.gz" \
 	| tar -xzC /usr/local
@@ -198,7 +200,7 @@ RUN set -x \
 	&& rm -rf "$GOPATH"
 
 # Install runc
-ENV RUNC_COMMIT 6c88a526cdd74aab90cc88018368c452c7294a06
+ENV RUNC_COMMIT e87436998478d222be209707503c27f6f91be0c5
 RUN set -x \
 	&& export GOPATH="$(mktemp -d)" \
 	&& git clone https://github.com/opencontainers/runc.git "$GOPATH/src/github.com/opencontainers/runc" \

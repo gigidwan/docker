@@ -14,7 +14,9 @@ import (
 
 	"github.com/Sirupsen/logrus"
 	"github.com/docker/distribution/uuid"
+	"github.com/docker/docker/api"
 	apiserver "github.com/docker/docker/api/server"
+	"github.com/docker/docker/api/server/middleware"
 	"github.com/docker/docker/api/server/router"
 	"github.com/docker/docker/api/server/router/build"
 	"github.com/docker/docker/api/server/router/container"
@@ -22,6 +24,7 @@ import (
 	"github.com/docker/docker/api/server/router/network"
 	systemrouter "github.com/docker/docker/api/server/router/system"
 	"github.com/docker/docker/api/server/router/volume"
+	"github.com/docker/docker/builder/dockerfile"
 	"github.com/docker/docker/cli"
 	"github.com/docker/docker/cliconfig"
 	"github.com/docker/docker/daemon"
@@ -29,12 +32,14 @@ import (
 	"github.com/docker/docker/dockerversion"
 	"github.com/docker/docker/libcontainerd"
 	"github.com/docker/docker/opts"
+	"github.com/docker/docker/pkg/authorization"
 	"github.com/docker/docker/pkg/jsonlog"
 	"github.com/docker/docker/pkg/listeners"
 	flag "github.com/docker/docker/pkg/mflag"
 	"github.com/docker/docker/pkg/pidfile"
 	"github.com/docker/docker/pkg/signal"
 	"github.com/docker/docker/pkg/system"
+	"github.com/docker/docker/pkg/version"
 	"github.com/docker/docker/registry"
 	"github.com/docker/docker/runconfig"
 	"github.com/docker/docker/utils"
@@ -208,10 +213,9 @@ func (cli *DaemonCli) CmdDaemon(args ...string) error {
 	}
 
 	serverConfig := &apiserver.Config{
-		AuthorizationPluginNames: cli.Config.AuthorizationPlugins,
-		Logging:                  true,
-		SocketGroup:              cli.Config.SocketGroup,
-		Version:                  dockerversion.Version,
+		Logging:     true,
+		SocketGroup: cli.Config.SocketGroup,
+		Version:     dockerversion.Version,
 	}
 	serverConfig = setPlatformServerConfig(serverConfig, cli.Config)
 
@@ -250,11 +254,24 @@ func (cli *DaemonCli) CmdDaemon(args ...string) error {
 		if len(protoAddrParts) != 2 {
 			logrus.Fatalf("bad format %s, expected PROTO://ADDR", protoAddr)
 		}
-		l, err := listeners.Init(protoAddrParts[0], protoAddrParts[1], serverConfig.SocketGroup, serverConfig.TLSConfig)
+
+		proto := protoAddrParts[0]
+		addr := protoAddrParts[1]
+
+		// It's a bad idea to bind to TCP without tlsverify.
+		if proto == "tcp" && (serverConfig.TLSConfig == nil || serverConfig.TLSConfig.ClientAuth != tls.RequireAndVerifyClientCert) {
+			logrus.Warn("[!] DON'T BIND ON ANY IP ADDRESS WITHOUT setting -tlsverify IF YOU DON'T KNOW WHAT YOU'RE DOING [!]")
+		}
+		l, err := listeners.Init(proto, addr, serverConfig.SocketGroup, serverConfig.TLSConfig)
 		if err != nil {
 			logrus.Fatal(err)
 		}
-
+		// If we're binding to a TCP port, make sure that a container doesn't try to use it.
+		if proto == "tcp" {
+			if err := allocateDaemonPort(addr); err != nil {
+				logrus.Fatal(err)
+			}
+		}
 		logrus.Debugf("Listener created for HTTP on %s (%s)", protoAddrParts[0], protoAddrParts[1])
 		api.Accept(protoAddrParts[1], l...)
 	}
@@ -288,6 +305,7 @@ func (cli *DaemonCli) CmdDaemon(args ...string) error {
 		"graphdriver": d.GraphDriverName(),
 	}).Info("Docker daemon")
 
+	cli.initMiddlewares(api, serverConfig)
 	initRouter(api, d)
 
 	reload := func(config *daemon.Config) {
@@ -412,11 +430,32 @@ func initRouter(s *apiserver.Server, d *daemon.Daemon) {
 		image.NewRouter(d, decoder),
 		systemrouter.NewRouter(d),
 		volume.NewRouter(d),
-		build.NewRouter(d),
+		build.NewRouter(dockerfile.NewBuildManager(d)),
 	}
 	if d.NetworkControllerEnabled() {
 		routers = append(routers, network.NewRouter(d))
 	}
 
 	s.InitRouter(utils.IsDebugEnabled(), routers...)
+}
+
+func (cli *DaemonCli) initMiddlewares(s *apiserver.Server, cfg *apiserver.Config) {
+	v := version.Version(cfg.Version)
+
+	vm := middleware.NewVersionMiddleware(v, api.DefaultVersion, api.MinVersion)
+	s.UseMiddleware(vm)
+
+	if cfg.EnableCors {
+		c := middleware.NewCORSMiddleware(cfg.CorsHeaders)
+		s.UseMiddleware(c)
+	}
+
+	u := middleware.NewUserAgentMiddleware(v)
+	s.UseMiddleware(u)
+
+	if len(cli.Config.AuthorizationPlugins) > 0 {
+		authZPlugins := authorization.NewPlugins(cli.Config.AuthorizationPlugins)
+		handleAuthorization := authorization.NewMiddleware(authZPlugins)
+		s.UseMiddleware(handleAuthorization)
+	}
 }
