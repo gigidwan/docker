@@ -52,6 +52,7 @@ type ConfigFile struct {
 	HTTPHeaders      map[string]string           `json:"HttpHeaders,omitempty"`
 	PsFormat         string                      `json:"psFormat,omitempty"`
 	ImagesFormat     string                      `json:"imagesFormat,omitempty"`
+	StatsFormat      string                      `json:"statsFormat,omitempty"`
 	DetachKeys       string                      `json:"detachKeys,omitempty"`
 	CredentialsStore string                      `json:"credsStore,omitempty"`
 	filename         string                      // Note: not serialized - for internal use only

@@ -83,6 +83,12 @@ func (cli *DockerCli) ImagesFormat() string {
 	return cli.configFile.ImagesFormat
 }
 
+// StatsFormat returns the format string specified in the configuration.
+// String contains columns and format specification, for example {{ID}}\t{{Name}}.
+func (cli *DockerCli) StatsFormat() string {
+	return cli.configFile.StatsFormat
+}
+
 func (cli *DockerCli) setRawTerminal() error {
 	if cli.isTerminalIn && os.Getenv("NORAW") == "" {
 		state, err := term.SetRawTerminal(cli.inFd)

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"fmt"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -83,10 +84,12 @@ func (s *DockerSuite) TestStatsAllRunningNoStream(c *check.C) {
 	outLines := strings.Split(out, "\n")
 	// check stat result of id2 contains real data
 	realData := reg.Find([]byte(outLines[1][12:]))
+	fmt.Println(realData)
 	c.Assert(realData, checker.NotNil, check.Commentf("stat result are empty: %s", out))
 	// check stat result of id1 contains real data
 	realData = reg.Find([]byte(outLines[2][12:]))
-	c.Assert(realData, checker.NotNil, check.Commentf("stat result are empty: %s", out))
+	fmt.Println(realData)
+	c.Assert(realData, checker.NotNil, check.Commentf("stat results of %s are empty: %s", id1, out))
 }
 
 func (s *DockerSuite) TestStatsAllNoStream(c *check.C) {

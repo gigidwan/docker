@@ -75,7 +75,12 @@ bundle_ubuntu() {
 	# Copy the binary
 	# This will fail if the binary bundle hasn't been built
 	mkdir -p "$DIR/usr/bin"
-	cp "$DEST/../binary/docker-$VERSION" "$DIR/usr/bin/docker"
+	if [ -f $DEST/../binary/docker-$VERSION ]; then
+		cp $DEST/../binary/docker-$VERSION $DIR/usr/bin/docker
+	else
+		cp $DEST/../dynbinary/docker-$VERSION $DIR/usr/bin/docker
+	fi
+#	cp "$DEST/../binary/docker-$VERSION" "$DIR/usr/bin/docker"
 
 	# Generate postinst/prerm/postrm scripts
 	cat > "$DEST/postinst" <<'EOF'

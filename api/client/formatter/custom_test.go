@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/docker/docker/api/client/stat"
 	"github.com/docker/docker/pkg/stringid"
 	"github.com/docker/engine-api/types"
 )
@@ -167,6 +168,59 @@ func TestImagesContext(t *testing.T) {
 		if h != c.expHeader {
 			t.Fatalf("Expected %s, was %s\n", c.expHeader, h)
 		}
+	}
+}
+
+func TestContainerStatsContext(t *testing.T) {
+	containerID := stringid.GenerateRandomID()
+
+	var ctx containerStatsContext
+	cases := []struct {
+		stats stat.ContainerStats
+		trunc     bool
+		expValue  string
+		expHeader string
+		call      func() string
+	}{
+		{stat.ContainerStats{ID: containerID}, true, stringid.TruncateID(containerID), containerHeader, ctx.ID},
+		{stat.ContainerStats{ID: containerID}, false, containerID, containerHeader, ctx.ID},
+		{stat.ContainerStats{Name: "foobar_baz"}, true, "foobar_baz", nameHeader, ctx.Name},
+		{stat.ContainerStats{CPUPercentage: 30.0}, true, "30.00%", statsCPUHeader, ctx.Cpu},
+		{stat.ContainerStats{ID: containerID}, false, "0.00%", statsCPUHeader, ctx.Cpu},
+		{stat.ContainerStats{Memory: 100 * 1024 * 1024.0, MemoryLimit: 2048 * 1024 * 1024.0}, true, "100 MiB / 2 GiB", statsMemUsageHeader, ctx.MemUsage},
+		{stat.ContainerStats{MemoryPercentage: 100.0 / 2048.0 * 100.0}, true, "4.88%", statsMemHeader, ctx.Mem},
+		{stat.ContainerStats{PidsCurrent: 1}, false, "1", statsPidHeader, ctx.Pid},
+		{stat.ContainerStats{NetworkRx: 100 * 1024 * 1024, NetworkTx: 800 * 1024 * 1024}, true, "104.9 MB / 838.9 MB", statsNetHeader, ctx.NetIO},
+		{stat.ContainerStats{BlockRead: 100 * 1024 * 1024, BlockWrite: 800 * 1024 * 1024}, true, "104.9 MB / 838.9 MB", statsBlockHeader, ctx.BlockIO},
+	}
+
+	for _, c := range cases {
+		ctx = containerStatsContext{s: c.stats, trunc: c.trunc}
+		v := c.call()
+		if strings.Contains(v, ",") {
+			compareMultipleValues(t, v, c.expValue)
+		} else if v != c.expValue {
+			t.Fatalf("Expected %s, was %s\n", c.expValue, v)
+		}
+
+		h := ctx.fullHeader()
+		if h != c.expHeader {
+			t.Fatalf("Expected %s, was %s\n", c.expHeader, h)
+		}
+	}
+
+	s1 := stat.ContainerStats{}
+	ctx = containerStatsContext{s: s1, trunc: true}
+
+	pid := ctx.Pid()
+	if pid == "" {
+		t.Fatalf("Expected 0, was %s", pid)
+	}
+
+	ctx = containerStatsContext{s: s1, trunc: true}
+	fullHeader := ctx.fullHeader()
+	if fullHeader != "" {
+		t.Fatalf("Expected fullHeader to be empty, was %s", fullHeader)
 	}
 }
 

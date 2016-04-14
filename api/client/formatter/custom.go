@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/docker/docker/api"
+	"github.com/docker/docker/api/client/stat"
 	"github.com/docker/docker/pkg/stringid"
 	"github.com/docker/docker/pkg/stringutils"
 	"github.com/docker/engine-api/types"
@@ -32,6 +33,14 @@ const (
 	tagHeader          = "TAG"
 	digestHeader       = "DIGEST"
 	mountsHeader       = "MOUNTS"
+	containerHeader    = "CONTAINER"
+	nameHeader         = "CONTAINER NAMES"
+	statsCPUHeader     = "CPU %"
+	statsMemUsageHeader= "MEM USAGE / LIMIT"
+	statsMemHeader     = "MEM %"
+	statsNetHeader     = "NET I/O"
+	statsBlockHeader   = "BLOCK I/O"
+	statsPidHeader     = "PIDS"
 )
 
 type containerContext struct {
@@ -240,4 +249,70 @@ func stripNamePrefix(ss []string) []string {
 	}
 
 	return sss
+}
+
+type containerStatsContext struct {
+	baseSubContext
+	trunc bool
+	s     stat.ContainerStats
+}
+
+func (c *containerStatsContext) ID() string {
+//	c.addHeader(containerHeader)
+	if c.trunc {
+		return stringid.TruncateID(c.s.ID)
+	}
+	return c.s.ID
+}
+
+func (c *containerStatsContext) Name() string {
+//	c.addHeader(nameHeader)
+	return c.s.Name
+}
+
+func (c *containerStatsContext) Cpu() string {
+//	c.addHeader(statsCPUHeader)
+	perc := c.s.CPUPercentage
+	percentage := fmt.Sprintf("%.2f%%", perc)
+	return percentage
+}
+
+func (c *containerStatsContext) MemUsage() string {
+//	c.addHeader(statsMemUsageHeader)
+	usage := units.BytesSize(c.s.Memory)
+	limit := units.BytesSize(float64(c.s.MemoryLimit))
+
+	mu := fmt.Sprintf("%s / %s", usage, limit)
+	return mu
+}
+
+func (c *containerStatsContext) Mem() string {
+//	c.addHeader(statsMemHeader)
+	perc := c.s.MemoryPercentage
+	percentage := fmt.Sprintf("%.2f%%", perc)
+	return percentage
+}
+
+func (c *containerStatsContext) NetIO() string {
+//	c.addHeader(statsNetHeader)
+	NetRx := units.HumanSize(c.s.NetworkRx)
+	NetTx := units.HumanSize(float64(c.s.NetworkTx))
+
+	net := fmt.Sprintf("%s / %s", NetRx, NetTx)
+	return net
+}
+
+func (c *containerStatsContext) BlockIO() string {
+//	c.addHeader(statsBlockHeader)
+	read := units.HumanSize(c.s.BlockRead)
+	write := units.HumanSize(float64(c.s.BlockWrite))
+
+	block := fmt.Sprintf("%s / %s", read, write)
+	return block
+}
+
+func (c *containerStatsContext) Pid() string {
+//	c.addHeader(statsPidHeader)
+	pid := fmt.Sprintf("%d", c.s.PidsCurrent)
+	return pid
 }

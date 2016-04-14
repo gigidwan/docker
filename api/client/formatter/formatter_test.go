@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/docker/docker/api/client/stat"
 	"github.com/docker/engine-api/types"
 )
 
@@ -524,6 +525,209 @@ func TestImageContextWriteWithNoImage(t *testing.T) {
 
 	for _, context := range contexts {
 		context.context.Images = images
+		context.context.Write()
+		actual := out.String()
+		if actual != context.expected {
+			t.Fatalf("Expected \n%s, got \n%s", context.expected, actual)
+		}
+		// Clean buffer
+		out.Reset()
+	}
+}
+
+func TestContainerStatsContextWrite(t *testing.T) {
++	contexts := []struct {
+		context  ContainerStatsContext
+		expected string
+	}{
+		// Errors
+		{
+			ContainerStatsContext{
+				Context: Context{
+					Format: "{{InvalidFunction}}",
+				},
+			},
+			`Template parsing error: template: :1: function "InvalidFunction" not defined
+`,
+		},
+		{
+			ContainerStatsContext{
+				Context: Context{
+					Format: "{{nil}}",
+				},
+			},
+			`Template parsing error: template: :1:2: executing "" at <nil>: nil is not a command
+`,
+		},
+		// Table Format
+		{
+			ContainerStatsContext{
+				Context: Context{
+					Format: "table",
+				},
+			},
+			`CONTAINER           CPU %               MEM USAGE / LIMIT   MEM %               NET I/O             BLOCK I/O           PIDS
+containerID1        30.00%              0 B / 0 B           0.00%               0 B / 0 B           0 B / 0 B           1
+containerID2        30.00%              0 B / 0 B           0.00%               0 B / 0 B           0 B / 0 B           1
+`,
+		},
+		{
+			ContainerStatsContext{
+				Context: Context{
+					Format: "table {{.Cpu}}",
+				},
+			},
+			"CPU %\n30.00%\n30.00%\n",
+		},
+		{
+			ContainerStatsContext{
+				Context: Context{
+					Format: "table {{.Cpu}}",
+				},
+				ShowName: true,
+			},
+			"CPU %               CONTAINER NAMES\n30.00%              foobar_baz\n30.00%              foobar_baz\n",
+		},
+		// Raw Format
+		{
+			ContainerStatsContext{
+				Context: Context{
+					Format: "raw",
+				},
+			},
+			fmt.Sprintf(`container: containerID1
+cpu: 30.00%%
+mem_usage: 0 B / 0 B
+mem: 0.00%%
+net_io: 0 B / 0 B
+block_io: 0 B / 0 B
+pid: 1
+
+container: containerID2
+cpu: 30.00%%
+mem_usage: 0 B / 0 B
+mem: 0.00%%
+net_io: 0 B / 0 B
+block_io: 0 B / 0 B
+pid: 1
+
+`),
+		},
+		{
+			ContainerStatsContext{
+				Context: Context{
+					Format: "raw",
+				},
+				ShowName: true,
+			},
+			fmt.Sprintf(`container: containerID1
+cpu: 30.00%%
+mem_usage: 0 B / 0 B
+mem: 0.00%%
+net_io: 0 B / 0 B
+block_io: 0 B / 0 B
+pid: 1
+name: foobar_baz
+
+container: containerID2
+cpu: 30.00%%
+mem_usage: 0 B / 0 B
+mem: 0.00%%
+net_io: 0 B / 0 B
+block_io: 0 B / 0 B
+pid: 1
+name: foobar_baz
+
+`),
+		},
+		// Custom Format
+		{
+			ContainerStatsContext{
+				Context: Context{
+					Format: "{{.Cpu}}",
+				},
+			},
+			"30.00%\n30.00%\n",
+		},
+		{
+			ContainerStatsContext{
+				Context: Context{
+					Format: "{{.Cpu}}",
+				},
+				ShowName: true,
+			},
+			"30.00%\n30.00%\n",
+		},
+	}
+
+	for _, context := range contexts {
+		stats := []stat.ContainerStats{
+			{ID: "containerID1", CPUPercentage: 30.0, PidsCurrent: 1, Name: "foobar_baz"},
+			{ID: "containerID2", CPUPercentage: 30.0, PidsCurrent: 1, Name: "foobar_baz"},
+		}
+		out := bytes.NewBufferString("")
+		context.context.Output = out
+		context.context.Stats = stats
+		context.context.Write()
+		actual := out.String()
+		if actual != context.expected {
+			t.Fatalf("Expected \n%s, got \n%s", context.expected, actual)
+		}
+		// Clean buffer
+		out.Reset()
+	}
+}
+
+func TestContainerStatsContextWriteWithNoContainers(t *testing.T) {
+	out := bytes.NewBufferString("")
+	stats := []stat.ContainerStats{}
+
+	contexts := []struct {
+		context  ContainerStatsContext
+		expected string
+	}{
+		{
+			ContainerStatsContext{
+				Context: Context{
+					Format: "{{.Cpu}}",
+					Output: out,
+				},
+			},
+			"",
+		},
+		{
+			ContainerStatsContext{
+				Context: Context{
+					Format: "table {{.Cpu}}",
+					Output: out,
+				},
+			},
+			"CPU %\n",
+		},
+		{
+			ContainerStatsContext{
+				Context: Context{
+					Format: "{{.Cpu}}",
+					Output: out,
+				},
+				ShowName: true,
+			},
+			"",
+		},
+		{
+			ContainerStatsContext{
+				Context: Context{
+					Format: "table {{.Cpu}}",
+					Output: out,
+				},
+				ShowName: true,
+			},
+			"CPU %               CONTAINER NAMES\n",
+		},
+	}
+
+	for _, context := range contexts {
+		context.context.Stats = stats
 		context.context.Write()
 		actual := out.String()
 		if actual != context.expected {
