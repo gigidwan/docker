@@ -158,7 +158,7 @@ func (s *containerStats) Collect(ctx context.Context, cli client.APIClient, stre
 	}
 }
 
-func (s []*stat.ContainerStats) Display(cli *DockerCli, format *string, trunc bool) error {
+func Display(cli *DockerCli, format *string, trunc bool, stats []*containerStats) {
 	//s.mu.RLock()
 	//defer s.mu.RUnlock()
 	//if s.err != nil {
@@ -171,7 +171,7 @@ func (s []*stat.ContainerStats) Display(cli *DockerCli, format *string, trunc bo
 		//return err
 	//}
 	stats := []stat.ContainerStats{}
-	for _, stat := range s {
+	for _, stat := range stats {
 		stats = append(stats, stat)
 	}
 	f := *format
@@ -196,7 +196,7 @@ func (s []*stat.ContainerStats) Display(cli *DockerCli, format *string, trunc bo
 	}
 
 	statsCtx.Write()
-	return nil
+//	return nil
 }
 
 func calculateCPUPercent(previousCPU, previousSystem uint64, v *types.StatsJSON) float64 {

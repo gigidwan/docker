@@ -211,19 +211,20 @@ func (cli *DockerCli) CmdStats(args ...string) error {
 //		}
 		//cs := make([]*containerStats, len(cStats.cs))
 		//copy(cs, cStats.cs)
-		for i, s := range cStats.cs {
+		for _, s := range cStats.cs {
 			s.mu.RLock()
 			if err := s.err; err != nil && !*noStream {
 				errStr := "--"
-				s = stat.ContainerStats{errStr, 0, 0, 0, 0, 0, 0, 0, 0, 0, errStr}
+				s.cs = stat.ContainerStats{errStr, 0, 0, 0, 0, 0, 0, 0, 0, 0, errStr}
 			}
 			s.mu.RUnlock()
 		}
-		for i, s := range cStats.cs {
-                        s.mu.RLock()
-			s.Display(cli, format, !*noTrunc)
-                        s.mu.RUnlock()
-                }
+		Display(cli, format, !*noTrunc, cStats.cs)
+//		for _, s := range cStats.cs {
+                        //s.mu.RLock()
+//			sDisplay(cli, format, !*noTrunc)
+                        //s.mu.RUnlock()
+//                }
 //		if err := cs.Display(cli, format, !*noTrunc); err != nil && !*noStream {
 //			toRemove = append(toRemove, i)
 //		}
