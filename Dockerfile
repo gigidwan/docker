@@ -23,7 +23,8 @@
 # the case. Therefore, you don't have to disable it anymore.
 #
 
-FROM debian:jessie
+#FROM debian:jessie
+FROM ubuntu:trusty
 
 # add zfs ppa
 RUN apt-key adv --keyserver hkp://p80.pool.sks-keyservers.net:80 --recv-keys E871F18B51E0147C77796AC81196BA81F6B0FC61 \
@@ -57,9 +58,11 @@ RUN apt-get update && apt-get install -y \
 	libapparmor-dev \
 	libcap-dev \
 	libltdl-dev \
+	libselinux1-dev \
 	libsqlite3-dev \
 	libsystemd-journal-dev \
 	libtool \
+	libudev-dev \
 	mercurial \
 	net-tools \
 	pkg-config \
@@ -67,6 +70,8 @@ RUN apt-get update && apt-get install -y \
 	python-mock \
 	python-pip \
 	python-websocket \
+	ruby \
+	ruby-dev \
 	ubuntu-zfs \
 	xfsprogs \
 	libzfs-dev \
@@ -74,20 +79,27 @@ RUN apt-get update && apt-get install -y \
 	zip \
 	--no-install-recommends \
 	&& pip install awscli==1.10.15
+
+#install fpm for ubuntu deb creation
+RUN gem install --no-rdoc --no-ri fpm --version 1.3.2
+
+ADD ./*.deb /
+RUN dpkg -i dmsetup_1.02.90-2ubuntu1_amd64.deb libdevmapper1.02.1_1.02.90-2ubuntu1_amd64.deb libdevmapper-dev_1.02.90-2ubuntu1_amd64.deb libdevmapper-event1.02.1_1.02.90-2ubuntu1_amd64.deb
+
 # Get lvm2 source for compiling statically
-ENV LVM2_VERSION 2.02.103
-RUN mkdir -p /usr/local/lvm2 \
-	&& curl -fsSL "https://mirrors.kernel.org/sourceware/lvm2/LVM2.${LVM2_VERSION}.tgz" \
-		| tar -xzC /usr/local/lvm2 --strip-components=1
+#ENV LVM2_VERSION 2.02.103
+#RUN mkdir -p /usr/local/lvm2 \
+#	&& curl -fsSL "https://mirrors.kernel.org/sourceware/lvm2/LVM2.${LVM2_VERSION}.tgz" \
+#		| tar -xzC /usr/local/lvm2 --strip-components=1
 # see https://git.fedorahosted.org/cgit/lvm2.git/refs/tags for release tags
 
 # Compile and install lvm2
-RUN cd /usr/local/lvm2 \
-	&& ./configure \
-		--build="$(gcc -print-multiarch)" \
-		--enable-static_link \
-	&& make device-mapper \
-	&& make install_device-mapper
+#RUN cd /usr/local/lvm2 \
+#	&& ./configure \
+#		--build="$(gcc -print-multiarch)" \
+#		--enable-static_link \
+#	&& make device-mapper \
+#	&& make install_device-mapper
 # see https://git.fedorahosted.org/cgit/lvm2.git/tree/INSTALL
 
 # Configure the container for OSX cross compilation
