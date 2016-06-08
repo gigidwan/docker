@@ -10,6 +10,7 @@ import (
 	"reflect"
 
 	"github.com/Sirupsen/logrus"
+	"github.com/docker/distribution"
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/image/v1"
 	"github.com/docker/docker/layer"
@@ -92,7 +93,7 @@ func (l *tarexporter) Load(inTar io.ReadCloser, outStream io.Writer, quiet bool)
 			r.Append(diffID)
 			newLayer, err := l.ls.Get(r.ChainID())
 			if err != nil {
-				newLayer, err = l.loadLayer(layerPath, rootFS, diffID.String(), progressOutput)
+				newLayer, err = l.loadLayer(layerPath, rootFS, diffID.String(), m.LayerSources[diffID], progressOutput)
 				if err != nil {
 					return err
 				}
@@ -122,6 +123,7 @@ func (l *tarexporter) Load(inTar io.ReadCloser, outStream io.Writer, quiet bool)
 		}
 
 		parentLinks = append(parentLinks, parentLink{imgID, m.Parent})
+		l.loggerImgEvent.LogImageEvent(imgID.String(), imgID.String(), "load")
 	}
 
 	for _, p := range validatedParentLinks(parentLinks) {
@@ -145,12 +147,12 @@ func (l *tarexporter) setParentID(id, parentID image.ID) error {
 		return err
 	}
 	if !checkValidParent(img, parent) {
-		return fmt.Errorf("image %v is not a valid parent for %v", parent.ID, img.ID)
+		return fmt.Errorf("image %v is not a valid parent for %v", parent.ID(), img.ID())
 	}
 	return l.is.SetParent(id, parentID)
 }
 
-func (l *tarexporter) loadLayer(filename string, rootFS image.RootFS, id string, progressOutput progress.Output) (layer.Layer, error) {
+func (l *tarexporter) loadLayer(filename string, rootFS image.RootFS, id string, foreignSrc distribution.Descriptor, progressOutput progress.Output) (layer.Layer, error) {
 	rawTar, err := os.Open(filename)
 	if err != nil {
 		logrus.Debugf("Error reading embedded tar: %v", err)
@@ -173,7 +175,15 @@ func (l *tarexporter) loadLayer(filename string, rootFS image.RootFS, id string,
 
 		progressReader := progress.NewProgressReader(inflatedLayerData, progressOutput, fileInfo.Size(), stringid.TruncateID(id), "Loading layer")
 
+		if ds, ok := l.ls.(layer.DescribableStore); ok {
+			return ds.RegisterWithDescriptor(progressReader, rootFS.ChainID(), foreignSrc)
+		}
 		return l.ls.Register(progressReader, rootFS.ChainID())
+
+	}
+
+	if ds, ok := l.ls.(layer.DescribableStore); ok {
+		return ds.RegisterWithDescriptor(inflatedLayerData, rootFS.ChainID(), foreignSrc)
 	}
 	return l.ls.Register(inflatedLayerData, rootFS.ChainID())
 }
@@ -297,7 +307,7 @@ func (l *tarexporter) legacyLoadImage(oldID, sourceDir string, loadedMap map[str
 	if err != nil {
 		return err
 	}
-	newLayer, err := l.loadLayer(layerPath, *rootFS, oldID, progressOutput)
+	newLayer, err := l.loadLayer(layerPath, *rootFS, oldID, distribution.Descriptor{}, progressOutput)
 	if err != nil {
 		return err
 	}

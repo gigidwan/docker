@@ -2,14 +2,26 @@ package client
 
 import (
 	"golang.org/x/net/context"
+	"io/ioutil"
 
 	"github.com/docker/docker/api/client/formatter"
 	Cli "github.com/docker/docker/cli"
 	"github.com/docker/docker/opts"
 	flag "github.com/docker/docker/pkg/mflag"
+	"github.com/docker/docker/utils/templates"
 	"github.com/docker/engine-api/types"
 	"github.com/docker/engine-api/types/filters"
 )
+
+type preProcessor struct {
+	opts *types.ContainerListOptions
+}
+
+// Size sets the size option when called by a template execution.
+func (p *preProcessor) Size() bool {
+	p.opts.Size = true
+	return true
+}
 
 // CmdPs outputs a list of Docker containers.
 //
@@ -26,8 +38,6 @@ func (cli *DockerCli) CmdPs(args ...string) error {
 		all      = cmd.Bool([]string{"a", "-all"}, false, "Show all containers (default shows just running)")
 		noTrunc  = cmd.Bool([]string{"-no-trunc"}, false, "Don't truncate output")
 		nLatest  = cmd.Bool([]string{"l", "-latest"}, false, "Show the latest created container (includes all states)")
-		since    = cmd.String([]string{"#-since"}, "", "Show containers created since Id or Name (includes all states)")
-		before   = cmd.String([]string{"#-before"}, "", "Only show containers created before Id or Name")
 		last     = cmd.Int([]string{"n"}, -1, "Show n last created containers (includes all states)")
 		format   = cmd.String([]string{"-format"}, "", "Pretty-print containers using a Go template")
 		flFilter = opts.NewListOpts(nil)
@@ -52,11 +62,17 @@ func (cli *DockerCli) CmdPs(args ...string) error {
 	options := types.ContainerListOptions{
 		All:    *all,
 		Limit:  *last,
-		Since:  *since,
-		Before: *before,
 		Size:   *size,
 		Filter: psFilterArgs,
 	}
+
+	pre := &preProcessor{opts: &options}
+	tmpl, err := templates.Parse(*format)
+	if err != nil {
+		return err
+	}
+
+	_ = tmpl.Execute(ioutil.Discard, pre)
 
 	containers, err := cli.client.ContainerList(context.Background(), options)
 	if err != nil {

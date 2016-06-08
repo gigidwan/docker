@@ -23,6 +23,7 @@ import (
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/grpclog"
+	"google.golang.org/grpc/transport"
 )
 
 const (
@@ -32,22 +33,25 @@ const (
 	containerdBinary          = "docker-containerd"
 	containerdPidFilename     = "docker-containerd.pid"
 	containerdSockFilename    = "docker-containerd.sock"
+	containerdStateDir        = "containerd"
 	eventTimestampFilename    = "event.ts"
 )
 
 type remote struct {
 	sync.RWMutex
-	apiClient   containerd.APIClient
-	daemonPid   int
-	stateDir    string
-	rpcAddr     string
-	startDaemon bool
-	debugLog    bool
-	rpcConn     *grpc.ClientConn
-	clients     []*client
-	eventTsPath string
-	pastEvents  map[string]*containerd.Event
-	runtimeArgs []string
+	apiClient     containerd.APIClient
+	daemonPid     int
+	stateDir      string
+	rpcAddr       string
+	startDaemon   bool
+	closeManually bool
+	debugLog      bool
+	rpcConn       *grpc.ClientConn
+	clients       []*client
+	eventTsPath   string
+	pastEvents    map[string]*containerd.Event
+	runtimeArgs   []string
+	daemonWaitCh  chan struct{}
 }
 
 // New creates a fresh instance of libcontainerd remote.
@@ -127,6 +131,7 @@ func (r *remote) handleConnectionChange() {
 					transientFailureCount = 0
 					if utils.IsProcessAlive(r.daemonPid) {
 						utils.KillProcess(r.daemonPid)
+						<-r.daemonWaitCh
 					}
 					if err := r.runContainerdDaemon(); err != nil { //FIXME: Handle error
 						logrus.Errorf("error restarting containerd: %v", err)
@@ -147,6 +152,7 @@ func (r *remote) Cleanup() {
 	if r.daemonPid == -1 {
 		return
 	}
+	r.closeManually = true
 	r.rpcConn.Close()
 	// Ask the daemon to quit
 	syscall.Kill(r.daemonPid, syscall.SIGTERM)
@@ -254,6 +260,11 @@ func (r *remote) handleEventStream(events containerd.API_EventsClient) {
 	for {
 		e, err := events.Recv()
 		if err != nil {
+			if grpc.ErrorDesc(err) == transport.ErrConnClosing.Desc &&
+				r.closeManually {
+				// ignore error if grpc remote connection is closed manually
+				return
+			}
 			logrus.Errorf("failed to receive event from containerd: %v", err)
 			go r.startEventsMonitor()
 			return
@@ -341,9 +352,15 @@ func (r *remote) runContainerdDaemon() error {
 	}
 
 	// Start a new instance
-	args := []string{"-l", r.rpcAddr, "--runtime", "docker-runc"}
+	args := []string{
+		"-l", fmt.Sprintf("unix://%s", r.rpcAddr),
+		"--shim", "docker-containerd-shim",
+		"--runtime", "docker-runc",
+		"--metrics-interval=0",
+		"--state-dir", filepath.Join(r.stateDir, containerdStateDir),
+	}
 	if r.debugLog {
-		args = append(args, "--debug", "--metrics-interval=0")
+		args = append(args, "--debug")
 	}
 	if len(r.runtimeArgs) > 0 {
 		for _, v := range r.runtimeArgs {
@@ -357,7 +374,7 @@ func (r *remote) runContainerdDaemon() error {
 	// redirect containerd logs to docker logs
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Pdeathsig: syscall.SIGKILL}
 	cmd.Env = nil
 	// clear the NOTIFY_SOCKET from the env when starting containerd
 	for _, e := range os.Environ() {
@@ -368,14 +385,18 @@ func (r *remote) runContainerdDaemon() error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	logrus.Infof("New containerd process, pid: %d\n", cmd.Process.Pid)
+	logrus.Infof("New containerd process, pid: %d", cmd.Process.Pid)
 
 	if _, err := f.WriteString(fmt.Sprintf("%d", cmd.Process.Pid)); err != nil {
 		utils.KillProcess(cmd.Process.Pid)
 		return err
 	}
 
-	go cmd.Wait() // Reap our child when needed
+	r.daemonWaitCh = make(chan struct{})
+	go func() {
+		cmd.Wait()
+		close(r.daemonWaitCh)
+	}() // Reap our child when needed
 	r.daemonPid = cmd.Process.Pid
 	return nil
 }

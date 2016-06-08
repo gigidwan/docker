@@ -398,7 +398,7 @@ func unpauseContainer(container string) error {
 		err = fmt.Errorf("failed to unpause container")
 	}
 
-	return nil
+	return err
 }
 
 func unpauseAllContainers() error {
@@ -930,7 +930,15 @@ func getContainerState(c *check.C, id string) (int, bool, error) {
 }
 
 func buildImageCmd(name, dockerfile string, useCache bool, buildFlags ...string) *exec.Cmd {
-	args := []string{"build", "-t", name}
+	return buildImageCmdWithHost(name, dockerfile, "", useCache, buildFlags...)
+}
+
+func buildImageCmdWithHost(name, dockerfile, host string, useCache bool, buildFlags ...string) *exec.Cmd {
+	args := []string{}
+	if host != "" {
+		args = append(args, "--host", host)
+	}
+	args = append(args, "build", "-t", name)
 	if !useCache {
 		args = append(args, "--no-cache")
 	}
@@ -1246,6 +1254,16 @@ func daemonTime(c *check.C) time.Time {
 	return dt
 }
 
+// daemonUnixTime returns the current time on the daemon host with nanoseconds precission.
+// It return the time formatted how the client sends timestamps to the server.
+func daemonUnixTime(c *check.C) string {
+	return parseEventTime(daemonTime(c))
+}
+
+func parseEventTime(t time.Time) string {
+	return fmt.Sprintf("%d.%09d", t.Unix(), int64(t.Nanosecond()))
+}
+
 func setupRegistry(c *check.C, schema1 bool, auth, tokenURL string) *testRegistryV2 {
 	reg, err := newTestRegistryV2(c, schema1, auth, tokenURL)
 	c.Assert(err, check.IsNil)
@@ -1280,6 +1298,9 @@ func appendBaseEnv(isTLS bool, env ...string) []string {
 		// windows: requires preserving SystemRoot, otherwise dial tcp fails
 		// with "GetAddrInfoW: A non-recoverable error occurred during a database lookup."
 		"SystemRoot",
+
+		// testing help text requires the $PATH to dockerd is set
+		"PATH",
 	}
 	if isTLS {
 		preserveList = append(preserveList, "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH")

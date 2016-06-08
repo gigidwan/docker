@@ -33,6 +33,7 @@ var acceptedPsFilterTags = map[string]bool{
 	"status":    true,
 	"since":     true,
 	"volume":    true,
+	"network":   true,
 }
 
 // iterationAction represents possible outcomes happening during the container iteration.
@@ -75,12 +76,6 @@ type listContext struct {
 	// exitAllowed is a list of exit codes allowed to filter with
 	exitAllowed []int
 
-	// FIXME Remove this for 1.12 as --since and --before are deprecated
-	// beforeContainer is a filter to ignore containers that appear before the one given
-	beforeContainer *container.Container
-	// sinceContainer is a filter to stop the filtering when the iterator arrive to the given container
-	sinceContainer *container.Container
-
 	// beforeFilter is a filter to ignore containers that appear before the one given
 	// this is used for --filter=before= and --before=, the latter is deprecated.
 	beforeFilter *container.Container
@@ -96,6 +91,56 @@ func (daemon *Daemon) Containers(config *types.ContainerListOptions) ([]*types.C
 	return daemon.reduceContainers(config, daemon.transformContainer)
 }
 
+func (daemon *Daemon) filterByNameIDMatches(ctx *listContext) []*container.Container {
+	idSearch := false
+	names := ctx.filters.Get("name")
+	ids := ctx.filters.Get("id")
+	if len(names)+len(ids) == 0 {
+		// if name or ID filters are not in use, return to
+		// standard behavior of walking the entire container
+		// list from the daemon's in-memory store
+		return daemon.List()
+	}
+
+	// idSearch will determine if we limit name matching to the IDs
+	// matched from any IDs which were specified as filters
+	if len(ids) > 0 {
+		idSearch = true
+	}
+
+	matches := make(map[string]bool)
+	// find ID matches; errors represent "not found" and can be ignored
+	for _, id := range ids {
+		if fullID, err := daemon.idIndex.Get(id); err == nil {
+			matches[fullID] = true
+		}
+	}
+
+	// look for name matches; if ID filtering was used, then limit the
+	// search space to the matches map only; errors represent "not found"
+	// and can be ignored
+	if len(names) > 0 {
+		for id, idNames := range ctx.names {
+			// if ID filters were used and no matches on that ID were
+			// found, continue to next ID in the list
+			if idSearch && !matches[id] {
+				continue
+			}
+			for _, eachName := range idNames {
+				if ctx.filters.Match("name", eachName) {
+					matches[id] = true
+				}
+			}
+		}
+	}
+
+	cntrs := make([]*container.Container, 0, len(matches))
+	for id := range matches {
+		cntrs = append(cntrs, daemon.containers.Get(id))
+	}
+	return cntrs
+}
+
 // reduceContainers parses the user's filtering options and generates the list of containers to return based on a reducer.
 func (daemon *Daemon) reduceContainers(config *types.ContainerListOptions, reducer containerReducer) ([]*types.Container, error) {
 	containers := []*types.Container{}
@@ -105,7 +150,12 @@ func (daemon *Daemon) reduceContainers(config *types.ContainerListOptions, reduc
 		return nil, err
 	}
 
-	for _, container := range daemon.List() {
+	// fastpath to only look at a subset of containers if specific name
+	// or ID matches were provided by the user--otherwise we potentially
+	// end up locking and querying many more containers than intended
+	containerList := daemon.filterByNameIDMatches(ctx)
+
+	for _, container := range containerList {
 		t, err := daemon.reducePsContainer(container, ctx, reducer)
 		if err != nil {
 			if err != errStopIteration {
@@ -174,8 +224,6 @@ func (daemon *Daemon) foldFilter(config *types.ContainerListOptions) (*listConte
 	}
 
 	var beforeContFilter, sinceContFilter *container.Container
-	// FIXME remove this for 1.12 as --since and --before are deprecated
-	var beforeContainer, sinceContainer *container.Container
 
 	err = psFilters.WalkValues("before", func(value string) error {
 		beforeContFilter, err = daemon.GetContainer(value)
@@ -213,29 +261,11 @@ func (daemon *Daemon) foldFilter(config *types.ContainerListOptions) (*listConte
 		})
 	}
 
-	// FIXME remove this for 1.12 as --since and --before are deprecated
-	if config.Before != "" {
-		beforeContainer, err = daemon.GetContainer(config.Before)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// FIXME remove this for 1.12 as --since and --before are deprecated
-	if config.Since != "" {
-		sinceContainer, err = daemon.GetContainer(config.Since)
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	return &listContext{
 		filters:              psFilters,
 		ancestorFilter:       ancestorFilter,
 		images:               imagesFilter,
 		exitAllowed:          filtExited,
-		beforeContainer:      beforeContainer,
-		sinceContainer:       sinceContainer,
 		beforeFilter:         beforeContFilter,
 		sinceFilter:          sinceContFilter,
 		ContainerListOptions: config,
@@ -263,8 +293,7 @@ func includeContainerInList(container *container.Container, ctx *listContext) it
 	}
 
 	// Do not include container if it's stopped and we're not filters
-	// FIXME remove the ctx.beforContainer and ctx.sinceContainer part of the condition for 1.12 as --since and --before are deprecated
-	if !container.Running && !ctx.All && ctx.Limit <= 0 && ctx.beforeContainer == nil && ctx.sinceContainer == nil {
+	if !container.Running && !ctx.All && ctx.Limit <= 0 {
 		return excludeContainer
 	}
 
@@ -288,21 +317,6 @@ func includeContainerInList(container *container.Container, ctx *listContext) it
 		return excludeContainer
 	}
 
-	// FIXME remove this for 1.12 as --since and --before are deprecated
-	if ctx.beforeContainer != nil {
-		if container.ID == ctx.beforeContainer.ID {
-			ctx.beforeContainer = nil
-		}
-		return excludeContainer
-	}
-
-	// FIXME remove this for 1.12 as --since and --before are deprecated
-	if ctx.sinceContainer != nil {
-		if container.ID == ctx.sinceContainer.ID {
-			return stopIteration
-		}
-	}
-
 	// Stop iteration when the index is over the limit
 	if ctx.Limit > 0 && ctx.idx == ctx.Limit {
 		return stopIteration
@@ -312,7 +326,7 @@ func includeContainerInList(container *container.Container, ctx *listContext) it
 	if len(ctx.exitAllowed) > 0 {
 		shouldSkip := true
 		for _, code := range ctx.exitAllowed {
-			if code == container.ExitCode && !container.Running {
+			if code == container.ExitCode && !container.Running && !container.StartedAt.IsZero() {
 				shouldSkip = false
 				break
 			}
@@ -357,6 +371,24 @@ func includeContainerInList(container *container.Container, ctx *listContext) it
 			return excludeContainer
 		}
 		if !ctx.images[container.ImageID] {
+			return excludeContainer
+		}
+	}
+
+	networkExist := fmt.Errorf("container part of network")
+	if ctx.filters.Include("network") {
+		err := ctx.filters.WalkValues("network", func(value string) error {
+			if _, ok := container.NetworkSettings.Networks[value]; ok {
+				return networkExist
+			}
+			for _, nw := range container.NetworkSettings.Networks {
+				if nw.NetworkID == value {
+					return networkExist
+				}
+			}
+			return nil
+		})
+		if err != networkExist {
 			return excludeContainer
 		}
 	}
@@ -486,6 +518,10 @@ func (daemon *Daemon) Volumes(filter string) ([]*types.Volume, []string, error) 
 	}
 
 	volumes, warnings, err := daemon.volumes.List()
+	if err != nil {
+		return nil, nil, err
+	}
+
 	filterVolumes, err := daemon.filterVolumes(volumes, volFilters)
 	if err != nil {
 		return nil, nil, err

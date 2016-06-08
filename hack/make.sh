@@ -26,6 +26,7 @@ set -o pipefail
 export DOCKER_PKG='github.com/docker/docker'
 export SCRIPTDIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 export MAKEDIR="$SCRIPTDIR/make"
+export PKG_CONFIG=${PKG_CONFIG:-pkg-config}
 
 : ${TEST_REPEAT:=0}
 
@@ -66,7 +67,8 @@ DEFAULT_BUNDLES=(
 	validate-toml
 	validate-vet
 
-	binary
+	binary-client
+	binary-daemon
 	dynbinary
 
 	test-unit
@@ -92,7 +94,7 @@ if command -v git &> /dev/null && [ -d .git ] && git rev-parse &> /dev/null; the
 		git status --porcelain --untracked-files=no
 		echo "#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 	fi
-	! BUILDTIME=$(date --rfc-3339 ns | sed -e 's/ /T/') &> /dev/null
+	! BUILDTIME=$(date --rfc-3339 ns 2> /dev/null | sed -e 's/ /T/') &> /dev/null
 	if [ -z $BUILDTIME ]; then
 		# If using bash 3.1 which doesn't support --rfc-3389, eg Windows CI
 		BUILDTIME=$(date -u)
@@ -112,6 +114,12 @@ if [ "$AUTO_GOPATH" ]; then
 	mkdir -p .gopath/src/"$(dirname "${DOCKER_PKG}")"
 	ln -sf ../../../.. .gopath/src/"${DOCKER_PKG}"
 	export GOPATH="${PWD}/.gopath:${PWD}/vendor"
+
+	if [ "$(go env GOOS)" = 'solaris' ]; then
+		# sys/unix is installed outside the standard library on solaris
+		# TODO need to allow for version change, need to get version from go
+		export GOPATH="${GOPATH}:/usr/lib/gocode/1.6.2"
+	fi
 fi
 
 if [ ! "$GOPATH" ]; then
@@ -126,13 +134,11 @@ if [ "$DOCKER_EXPERIMENTAL" ]; then
 	DOCKER_BUILDTAGS+=" experimental"
 fi
 
-if [ -z "$DOCKER_CLIENTONLY" ]; then
-	DOCKER_BUILDTAGS+=" daemon"
-	if pkg-config 'libsystemd >= 209' 2> /dev/null ; then
-		DOCKER_BUILDTAGS+=" journald"
-	elif pkg-config 'libsystemd-journal' 2> /dev/null ; then
-		DOCKER_BUILDTAGS+=" journald journald_compat"
-	fi
+DOCKER_BUILDTAGS+=" daemon"
+if ${PKG_CONFIG} 'libsystemd >= 209' 2> /dev/null ; then
+	DOCKER_BUILDTAGS+=" journald"
+elif ${PKG_CONFIG} 'libsystemd-journal' 2> /dev/null ; then
+	DOCKER_BUILDTAGS+=" journald journald_compat"
 fi
 
 # test whether "btrfs/version.h" exists and apply btrfs_noversion appropriately
@@ -327,6 +333,19 @@ copy_containerd() {
 		fi
 	fi
 }
+
+install_binary() {
+	file="$1"
+	target="${DOCKER_MAKE_INSTALL_PREFIX:=/usr/local}/bin/"
+	if [ "$(go env GOOS)" == "linux" ]; then
+		echo "Installing $(basename $file) to ${target}"
+		cp -L "$file" "$target"
+	else
+		echo "Install is only supported on linux"
+		return 1
+	fi
+}
+
 
 main() {
 	# We want this to fail if the bundles already exist and cannot be removed.

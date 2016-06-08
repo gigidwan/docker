@@ -34,6 +34,8 @@ func (daemon *Daemon) createSpec(c *container.Container) (*libcontainerd.Spec, e
 		return nil, fmt.Errorf("Failed to graph.Get on ImageID %s - %s", c.ImageID, err)
 	}
 
+	s.Platform.OSVersion = img.OSVersion
+
 	// In base spec
 	s.Hostname = c.FullHostname()
 
@@ -56,6 +58,16 @@ func (daemon *Daemon) createSpec(c *container.Container) (*libcontainerd.Spec, e
 		s.Process.Args = escapeArgs(s.Process.Args)
 	}
 	s.Process.Cwd = c.Config.WorkingDir
+	if len(s.Process.Cwd) == 0 {
+		// We default to C:\ to workaround the oddity of the case that the
+		// default directory for cmd running as LocalSystem (or
+		// ContainerAdministrator) is c:\windows\system32. Hence docker run
+		// <image> cmd will by default end in c:\windows\system32, rather
+		// than 'root' (/) on Linux. The oddity is that if you have a dockerfile
+		// which has no WORKDIR and has a COPY file ., . will be interpreted
+		// as c:\. Hence, setting it to default of c:\ makes for consistency.
+		s.Process.Cwd = `C:\`
+	}
 	s.Process.Env = c.CreateDaemonEnvironment(linkedEnv)
 	s.Process.InitialConsoleSize = c.HostConfig.ConsoleSize
 	s.Process.Terminal = c.Config.Tty
@@ -160,9 +172,8 @@ func (daemon *Daemon) createSpec(c *container.Container) (*libcontainerd.Spec, e
 	cpuShares := uint64(c.HostConfig.CPUShares)
 	s.Windows.Resources = &windowsoci.Resources{
 		CPU: &windowsoci.CPU{
-			//TODO Count: ...,
-			//TODO Percent: ...,
-			Shares: &cpuShares,
+			Percent: &c.HostConfig.CPUPercent,
+			Shares:  &cpuShares,
 		},
 		Memory: &windowsoci.Memory{
 		//TODO Limit: ...,
@@ -172,9 +183,9 @@ func (daemon *Daemon) createSpec(c *container.Container) (*libcontainerd.Spec, e
 		//TODO Bandwidth: ...,
 		},
 		Storage: &windowsoci.Storage{
-		//TODO Bps: ...,
-		//TODO Iops: ...,
-		//TODO SandboxSize: ...,
+			Bps:  &c.HostConfig.IOMaximumBandwidth,
+			Iops: &c.HostConfig.IOMaximumIOps,
+			//TODO SandboxSize: ...,
 		},
 	}
 	return (*libcontainerd.Spec)(&s), nil

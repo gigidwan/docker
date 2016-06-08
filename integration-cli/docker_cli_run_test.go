@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,11 +21,12 @@ import (
 
 	"github.com/docker/docker/pkg/integration/checker"
 	"github.com/docker/docker/pkg/mount"
+	"github.com/docker/docker/pkg/stringid"
 	"github.com/docker/docker/pkg/stringutils"
 	"github.com/docker/docker/runconfig"
 	"github.com/docker/go-connections/nat"
-	"github.com/docker/libnetwork/netutils"
 	"github.com/docker/libnetwork/resolvconf"
+	"github.com/docker/libnetwork/types"
 	"github.com/go-check/check"
 	libcontainerUser "github.com/opencontainers/runc/libcontainer/user"
 )
@@ -122,13 +124,10 @@ func (s *DockerSuite) TestRunDetachedContainerIDPrinting(c *check.C) {
 
 // the working directory should be set correctly
 func (s *DockerSuite) TestRunWorkingDirectory(c *check.C) {
-	// TODO Windows: There's a Windows bug stopping this from working.
-	testRequires(c, DaemonIsLinux)
 	dir := "/root"
 	image := "busybox"
 	if daemonPlatform == "windows" {
-		dir = `/windows`
-		image = WindowsBaseImage
+		dir = `C:/Windows`
 	}
 
 	// First with -w
@@ -285,11 +284,21 @@ func (s *DockerSuite) TestUserDefinedNetworkAlias(c *check.C) {
 	testRequires(c, DaemonIsLinux, NotUserNamespace, NotArm)
 	dockerCmd(c, "network", "create", "-d", "bridge", "net1")
 
-	dockerCmd(c, "run", "-d", "--net=net1", "--name=first", "--net-alias=foo1", "--net-alias=foo2", "busybox", "top")
+	cid1, _ := dockerCmd(c, "run", "-d", "--net=net1", "--name=first", "--net-alias=foo1", "--net-alias=foo2", "busybox", "top")
 	c.Assert(waitRun("first"), check.IsNil)
 
-	dockerCmd(c, "run", "-d", "--net=net1", "--name=second", "busybox", "top")
+	// Check if default short-id alias is added automatically
+	id := strings.TrimSpace(cid1)
+	aliases := inspectField(c, id, "NetworkSettings.Networks.net1.Aliases")
+	c.Assert(aliases, checker.Contains, stringid.TruncateID(id))
+
+	cid2, _ := dockerCmd(c, "run", "-d", "--net=net1", "--name=second", "busybox", "top")
 	c.Assert(waitRun("second"), check.IsNil)
+
+	// Check if default short-id alias is added automatically
+	id = strings.TrimSpace(cid2)
+	aliases = inspectField(c, id, "NetworkSettings.Networks.net1.Aliases")
+	c.Assert(aliases, checker.Contains, stringid.TruncateID(id))
 
 	// ping to first and its network-scoped aliases
 	_, _, err := dockerCmdWithError("exec", "second", "ping", "-c", "1", "first")
@@ -297,6 +306,9 @@ func (s *DockerSuite) TestUserDefinedNetworkAlias(c *check.C) {
 	_, _, err = dockerCmdWithError("exec", "second", "ping", "-c", "1", "foo1")
 	c.Assert(err, check.IsNil)
 	_, _, err = dockerCmdWithError("exec", "second", "ping", "-c", "1", "foo2")
+	c.Assert(err, check.IsNil)
+	// ping first container's short-id alias
+	_, _, err = dockerCmdWithError("exec", "second", "ping", "-c", "1", stringid.TruncateID(cid1))
 	c.Assert(err, check.IsNil)
 
 	// Restart first container
@@ -309,6 +321,9 @@ func (s *DockerSuite) TestUserDefinedNetworkAlias(c *check.C) {
 	_, _, err = dockerCmdWithError("exec", "second", "ping", "-c", "1", "foo1")
 	c.Assert(err, check.IsNil)
 	_, _, err = dockerCmdWithError("exec", "second", "ping", "-c", "1", "foo2")
+	c.Assert(err, check.IsNil)
+	// ping first container's short-id alias
+	_, _, err = dockerCmdWithError("exec", "second", "ping", "-c", "1", stringid.TruncateID(cid1))
 	c.Assert(err, check.IsNil)
 }
 
@@ -530,6 +545,27 @@ func (s *DockerSuite) TestRunNoDupVolumes(c *check.C) {
 		if !strings.Contains(out, "Duplicate mount point") {
 			c.Fatalf("Expected 'duplicate mount point' error, got %v", out)
 		}
+	}
+
+	// Test for https://github.com/docker/docker/issues/22093
+	volumename1 := "test1"
+	volumename2 := "test2"
+	volume1 := volumename1 + someplace
+	volume2 := volumename2 + someplace
+	if out, _, err := dockerCmdWithError("run", "-v", volume1, "-v", volume2, "busybox", "true"); err == nil {
+		c.Fatal("Expected error about duplicate mount definitions")
+	} else {
+		if !strings.Contains(out, "Duplicate mount point") {
+			c.Fatalf("Expected 'duplicate mount point' error, got %v", out)
+		}
+	}
+	// create failed should have create volume volumename1 or volumename2
+	// we should remove volumename2 or volumename2 successfully
+	out, _ := dockerCmd(c, "volume", "ls")
+	if strings.Contains(out, volumename1) {
+		dockerCmd(c, "volume", "rm", volumename1)
+	} else {
+		dockerCmd(c, "volume", "rm", volumename2)
 	}
 }
 
@@ -753,9 +789,6 @@ func (s *DockerSuite) TestRunUserNotFound(c *check.C) {
 
 func (s *DockerSuite) TestRunTwoConcurrentContainers(c *check.C) {
 	sleepTime := "2"
-	if daemonPlatform == "windows" {
-		sleepTime = "20" // Make more reliable on Windows
-	}
 	group := sync.WaitGroup{}
 	group.Add(2)
 
@@ -1294,13 +1327,13 @@ func (s *DockerSuite) TestRunDnsOptionsBasedOnHostResolvConf(c *check.C) {
 		c.Fatalf("/etc/resolv.conf does not exist")
 	}
 
-	hostNamservers := resolvconf.GetNameservers(origResolvConf, netutils.IP)
+	hostNameservers := resolvconf.GetNameservers(origResolvConf, types.IP)
 	hostSearch := resolvconf.GetSearchDomains(origResolvConf)
 
 	var out string
 	out, _ = dockerCmd(c, "run", "--dns=127.0.0.1", "busybox", "cat", "/etc/resolv.conf")
 
-	if actualNameservers := resolvconf.GetNameservers([]byte(out), netutils.IP); string(actualNameservers[0]) != "127.0.0.1" {
+	if actualNameservers := resolvconf.GetNameservers([]byte(out), types.IP); string(actualNameservers[0]) != "127.0.0.1" {
 		c.Fatalf("expected '127.0.0.1', but says: %q", string(actualNameservers[0]))
 	}
 
@@ -1316,13 +1349,13 @@ func (s *DockerSuite) TestRunDnsOptionsBasedOnHostResolvConf(c *check.C) {
 
 	out, _ = dockerCmd(c, "run", "--dns-search=mydomain", "busybox", "cat", "/etc/resolv.conf")
 
-	actualNameservers := resolvconf.GetNameservers([]byte(out), netutils.IP)
-	if len(actualNameservers) != len(hostNamservers) {
-		c.Fatalf("expected %q nameserver(s), but it has: %q", len(hostNamservers), len(actualNameservers))
+	actualNameservers := resolvconf.GetNameservers([]byte(out), types.IP)
+	if len(actualNameservers) != len(hostNameservers) {
+		c.Fatalf("expected %q nameserver(s), but it has: %q", len(hostNameservers), len(actualNameservers))
 	}
 	for i := range actualNameservers {
-		if actualNameservers[i] != hostNamservers[i] {
-			c.Fatalf("expected %q nameserver, but says: %q", actualNameservers[i], hostNamservers[i])
+		if actualNameservers[i] != hostNameservers[i] {
+			c.Fatalf("expected %q nameserver, but says: %q", actualNameservers[i], hostNameservers[i])
 		}
 	}
 
@@ -1347,11 +1380,11 @@ func (s *DockerSuite) TestRunDnsOptionsBasedOnHostResolvConf(c *check.C) {
 		c.Fatalf("/etc/resolv.conf does not exist")
 	}
 
-	hostNamservers = resolvconf.GetNameservers(resolvConf, netutils.IP)
+	hostNameservers = resolvconf.GetNameservers(resolvConf, types.IP)
 	hostSearch = resolvconf.GetSearchDomains(resolvConf)
 
 	out, _ = dockerCmd(c, "run", "busybox", "cat", "/etc/resolv.conf")
-	if actualNameservers = resolvconf.GetNameservers([]byte(out), netutils.IP); string(actualNameservers[0]) != "12.34.56.78" || len(actualNameservers) != 1 {
+	if actualNameservers = resolvconf.GetNameservers([]byte(out), types.IP); string(actualNameservers[0]) != "12.34.56.78" || len(actualNameservers) != 1 {
 		c.Fatalf("expected '12.34.56.78', but has: %v", actualNameservers)
 	}
 
@@ -1422,7 +1455,7 @@ func (s *DockerSuite) TestRunResolvconfUpdate(c *check.C) {
 	}()
 
 	//1. test that a restarting container gets an updated resolv.conf
-	dockerCmd(c, "run", "--name='first'", "busybox", "true")
+	dockerCmd(c, "run", "--name=first", "busybox", "true")
 	containerID1, err := getIDByName("first")
 	if err != nil {
 		c.Fatal(err)
@@ -1452,7 +1485,7 @@ func (s *DockerSuite) TestRunResolvconfUpdate(c *check.C) {
 								} */
 	//2. test that a restarting container does not receive resolv.conf updates
 	//   if it modified the container copy of the starting point resolv.conf
-	dockerCmd(c, "run", "--name='second'", "busybox", "sh", "-c", "echo 'search mylittlepony.com' >>/etc/resolv.conf")
+	dockerCmd(c, "run", "--name=second", "busybox", "sh", "-c", "echo 'search mylittlepony.com' >>/etc/resolv.conf")
 	containerID2, err := getIDByName("second")
 	if err != nil {
 		c.Fatal(err)
@@ -1541,7 +1574,7 @@ func (s *DockerSuite) TestRunResolvconfUpdate(c *check.C) {
 	}
 
 	// Run the container so it picks up the old settings
-	dockerCmd(c, "run", "--name='third'", "busybox", "true")
+	dockerCmd(c, "run", "--name=third", "busybox", "true")
 	containerID3, err := getIDByName("third")
 	if err != nil {
 		c.Fatal(err)
@@ -1743,10 +1776,9 @@ func (s *DockerSuite) TestRunExitOnStdinClose(c *check.C) {
 	name := "testrunexitonstdinclose"
 
 	meow := "/bin/cat"
-	delay := 1
+	delay := 60
 	if daemonPlatform == "windows" {
 		meow = "cat"
-		delay = 60
 	}
 	runCmd := exec.Command(dockerBinary, "run", "--name", name, "-i", "busybox", meow)
 
@@ -2430,6 +2462,53 @@ func (s *DockerSuite) TestRunModeIpcContainerNotRunning(c *check.C) {
 	}
 }
 
+func (s *DockerSuite) TestRunModePidContainer(c *check.C) {
+	// Not applicable on Windows as uses Unix-specific capabilities
+	testRequires(c, SameHostDaemon, DaemonIsLinux)
+
+	out, _ := dockerCmd(c, "run", "-d", "busybox", "sh", "-c", "top")
+
+	id := strings.TrimSpace(out)
+	state := inspectField(c, id, "State.Running")
+	if state != "true" {
+		c.Fatal("Container state is 'not running'")
+	}
+	pid1 := inspectField(c, id, "State.Pid")
+
+	parentContainerPid, err := os.Readlink(fmt.Sprintf("/proc/%s/ns/pid", pid1))
+	if err != nil {
+		c.Fatal(err)
+	}
+
+	out, _ = dockerCmd(c, "run", fmt.Sprintf("--pid=container:%s", id), "busybox", "readlink", "/proc/self/ns/pid")
+	out = strings.Trim(out, "\n")
+	if parentContainerPid != out {
+		c.Fatalf("PID different with --pid=container:%s %s != %s\n", id, parentContainerPid, out)
+	}
+}
+
+func (s *DockerSuite) TestRunModePidContainerNotExists(c *check.C) {
+	// Not applicable on Windows as uses Unix-specific capabilities
+	testRequires(c, DaemonIsLinux)
+	out, _, err := dockerCmdWithError("run", "-d", "--pid", "container:abcd1234", "busybox", "top")
+	if !strings.Contains(out, "abcd1234") || err == nil {
+		c.Fatalf("run PID from a non exists container should with correct error out")
+	}
+}
+
+func (s *DockerSuite) TestRunModePidContainerNotRunning(c *check.C) {
+	// Not applicable on Windows as uses Unix-specific capabilities
+	testRequires(c, SameHostDaemon, DaemonIsLinux)
+
+	out, _ := dockerCmd(c, "create", "busybox")
+
+	id := strings.TrimSpace(out)
+	out, _, err := dockerCmdWithError("run", fmt.Sprintf("--pid=container:%s", id), "busybox")
+	if err == nil {
+		c.Fatalf("Run container with pid mode container should fail with non running container: %s\n%s", out, err)
+	}
+}
+
 func (s *DockerSuite) TestRunMountShmMqueueFromHost(c *check.C) {
 	// Not applicable on Windows as uses Unix-specific capabilities
 	testRequires(c, SameHostDaemon, DaemonIsLinux, NotUserNamespace)
@@ -2585,7 +2664,10 @@ func (s *DockerSuite) TestRunTTYWithPipe(c *check.C) {
 			return
 		}
 
-		expected := "cannot enable tty mode"
+		expected := "the input device is not a TTY"
+		if runtime.GOOS == "windows" {
+			expected += ".  If you are using mintty, try prefixing the command with 'winpty'"
+		}
 		if out, _, err := runCommandWithOutput(cmd); err == nil {
 			errChan <- fmt.Errorf("run should have failed")
 			return
@@ -2598,7 +2680,7 @@ func (s *DockerSuite) TestRunTTYWithPipe(c *check.C) {
 	select {
 	case err := <-errChan:
 		c.Assert(err, check.IsNil)
-	case <-time.After(6 * time.Second):
+	case <-time.After(30 * time.Second):
 		c.Fatal("container is running but should have failed")
 	}
 }
@@ -2694,8 +2776,8 @@ func (s *DockerSuite) TestRunAllowPortRangeThroughPublish(c *check.C) {
 }
 
 func (s *DockerSuite) TestRunSetDefaultRestartPolicy(c *check.C) {
-	dockerCmd(c, "run", "-d", "--name", "test", "busybox", "sleep", "30")
-	out := inspectField(c, "test", "HostConfig.RestartPolicy.Name")
+	runSleepingContainer(c, "--name=testrunsetdefaultrestartpolicy")
+	out := inspectField(c, "testrunsetdefaultrestartpolicy", "HostConfig.RestartPolicy.Name")
 	if out != "no" {
 		c.Fatalf("Set default restart policy failed")
 	}
@@ -2810,8 +2892,8 @@ func (s *DockerSuite) TestRunContainerWithReadonlyRootfsWithAddHostFlag(c *check
 
 func (s *DockerSuite) TestRunVolumesFromRestartAfterRemoved(c *check.C) {
 	prefix, _ := getPrefixAndSlashFromDaemonPlatform()
-	dockerCmd(c, "run", "-d", "--name", "voltest", "-v", prefix+"/foo", "busybox", "sleep", "60")
-	dockerCmd(c, "run", "-d", "--name", "restarter", "--volumes-from", "voltest", "busybox", "sleep", "60")
+	runSleepingContainer(c, "--name=voltest", "-v", prefix+"/foo")
+	runSleepingContainer(c, "--name=restarter", "--volumes-from", "voltest")
 
 	// Remove the main volume container and restart the consuming container
 	dockerCmd(c, "rm", "-f", "voltest")
@@ -4220,7 +4302,8 @@ func (s *DockerSuite) TestRunAttachFailedNoLeak(c *check.C) {
 	// TODO Windows Post TP5. Fix the error message string
 	c.Assert(strings.Contains(string(out), "port is already allocated") ||
 		strings.Contains(string(out), "were not connected because a duplicate name exists") ||
-		strings.Contains(string(out), "HNS failed with error : Failed to create endpoint"), checker.Equals, true, check.Commentf("Output: %s", out))
+		strings.Contains(string(out), "HNS failed with error : Failed to create endpoint") ||
+		strings.Contains(string(out), "HNS failed with error : The object already exists"), checker.Equals, true, check.Commentf("Output: %s", out))
 	dockerCmd(c, "rm", "-f", "test")
 
 	// NGoroutines is not updated right away, so we need to wait before failing
@@ -4279,15 +4362,73 @@ func (s *DockerSuite) TestRunTooLongHostname(c *check.C) {
 	hostname1 := "this-is-a-way-too-long-hostname-but-it-should-give-a-nice-error.local"
 	out, _, err := dockerCmdWithError("run", "--hostname", hostname1, "busybox", "echo", "test")
 	c.Assert(err, checker.NotNil, check.Commentf("Expected docker run to fail!"))
-	c.Assert(out, checker.Contains, "invalid hostname format for --hostname:", check.Commentf("Expected to have 'invalid hostname format for --hostname:' in the output, get: %s!", out))
+	c.Assert(out, checker.Contains, "invalid hostname format:", check.Commentf("Expected to have 'invalid hostname format:' in the output, get: %s!", out))
 
-	// HOST_NAME_MAX=64 so 65 bytes will fail
-	hostname2 := "this-is-a-hostname-with-65-bytes-so-it-should-give-an-error.local"
-	out, _, err = dockerCmdWithError("run", "--hostname", hostname2, "busybox", "echo", "test")
-	c.Assert(err, checker.NotNil, check.Commentf("Expected docker run to fail!"))
-	c.Assert(out, checker.Contains, "invalid hostname format for --hostname:", check.Commentf("Expected to have 'invalid hostname format for --hostname:' in the output, get: %s!", out))
+	// Additional test cases
+	validHostnames := map[string]string{
+		"hostname":    "hostname",
+		"host-name":   "host-name",
+		"hostname123": "hostname123",
+		"123hostname": "123hostname",
+		"hostname-of-63-bytes-long-should-be-valid-and-without-any-error": "hostname-of-63-bytes-long-should-be-valid-and-without-any-error",
+	}
+	for hostname := range validHostnames {
+		dockerCmd(c, "run", "--hostname", hostname, "busybox", "echo", "test")
+	}
 
-	// 64 bytes will be OK
-	hostname3 := "this-is-a-hostname-with-64-bytes-so-will-not-give-an-error.local"
-	dockerCmd(c, "run", "--hostname", hostname3, "busybox", "echo", "test")
+	invalidHostnames := map[string]string{
+		"^hostname": "invalid hostname format: ^hostname",
+		"hostname%": "invalid hostname format: hostname%",
+		"host&name": "invalid hostname format: host&name",
+		"-hostname": "invalid hostname format: -hostname",
+		"host_name": "invalid hostname format: host_name",
+		"hostname-of-64-bytes-long-should-be-invalid-and-be-with-an-error": "invalid hostname format: hostname-of-64-bytes-long-should-be-invalid-and-be-with-an-error",
+	}
+
+	for hostname, expectedError := range invalidHostnames {
+		out, _, err = dockerCmdWithError("run", "--hostname", hostname, "busybox", "echo", "test")
+		c.Assert(err, checker.NotNil, check.Commentf("Expected docker run to fail!"))
+		c.Assert(out, checker.Contains, expectedError, check.Commentf("Expected to have '%s' in the output, get: %s!", expectedError, out))
+
+	}
+}
+
+// Test case for #21976
+func (s *DockerSuite) TestRunDnsInHostMode(c *check.C) {
+	testRequires(c, DaemonIsLinux, NotUserNamespace)
+
+	expectedOutput := "nameserver 127.0.0.1"
+	expectedWarning := "Localhost DNS setting"
+	out, stderr, _ := dockerCmdWithStdoutStderr(c, "run", "--dns=127.0.0.1", "--net=host", "busybox", "cat", "/etc/resolv.conf")
+	c.Assert(out, checker.Contains, expectedOutput, check.Commentf("Expected '%s', but got %q", expectedOutput, out))
+	c.Assert(stderr, checker.Contains, expectedWarning, check.Commentf("Expected warning on stderr about localhost resolver, but got %q", stderr))
+
+	expectedOutput = "nameserver 1.2.3.4"
+	out, _ = dockerCmd(c, "run", "--dns=1.2.3.4", "--net=host", "busybox", "cat", "/etc/resolv.conf")
+	c.Assert(out, checker.Contains, expectedOutput, check.Commentf("Expected '%s', but got %q", expectedOutput, out))
+
+	expectedOutput = "search example.com"
+	out, _ = dockerCmd(c, "run", "--dns-search=example.com", "--net=host", "busybox", "cat", "/etc/resolv.conf")
+	c.Assert(out, checker.Contains, expectedOutput, check.Commentf("Expected '%s', but got %q", expectedOutput, out))
+
+	expectedOutput = "options timeout:3"
+	out, _ = dockerCmd(c, "run", "--dns-opt=timeout:3", "--net=host", "busybox", "cat", "/etc/resolv.conf")
+	c.Assert(out, checker.Contains, expectedOutput, check.Commentf("Expected '%s', but got %q", expectedOutput, out))
+
+	expectedOutput1 := "nameserver 1.2.3.4"
+	expectedOutput2 := "search example.com"
+	expectedOutput3 := "options timeout:3"
+	out, _ = dockerCmd(c, "run", "--dns=1.2.3.4", "--dns-search=example.com", "--dns-opt=timeout:3", "--net=host", "busybox", "cat", "/etc/resolv.conf")
+	c.Assert(out, checker.Contains, expectedOutput1, check.Commentf("Expected '%s', but got %q", expectedOutput1, out))
+	c.Assert(out, checker.Contains, expectedOutput2, check.Commentf("Expected '%s', but got %q", expectedOutput2, out))
+	c.Assert(out, checker.Contains, expectedOutput3, check.Commentf("Expected '%s', but got %q", expectedOutput3, out))
+}
+
+// Test case for #21976
+func (s *DockerSuite) TestRunAddHostInHostMode(c *check.C) {
+	testRequires(c, DaemonIsLinux, NotUserNamespace)
+
+	expectedOutput := "1.2.3.4\textra"
+	out, _ := dockerCmd(c, "run", "--add-host=extra:1.2.3.4", "--net=host", "busybox", "cat", "/etc/hosts")
+	c.Assert(out, checker.Contains, expectedOutput, check.Commentf("Expected '%s', but got %q", expectedOutput, out))
 }

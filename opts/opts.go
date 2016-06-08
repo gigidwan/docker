@@ -100,6 +100,11 @@ func (opts *ListOpts) Len() int {
 	return len((*opts.values))
 }
 
+// Type returns a string name for this Option type
+func (opts *ListOpts) Type() string {
+	return "list"
+}
+
 // NamedOption is an interface that list and map options
 // with names implement.
 type NamedOption interface {
@@ -161,6 +166,11 @@ func (opts *MapOpts) GetAll() map[string]string {
 
 func (opts *MapOpts) String() string {
 	return fmt.Sprintf("%v", map[string]string((opts.values)))
+}
+
+// Type returns a string name for this Option type
+func (opts *MapOpts) Type() string {
+	return "map"
 }
 
 // NewMapOpts creates a new MapOpts with the specified map of values and a validator.
@@ -241,7 +251,7 @@ func ValidateLabel(val string) (string, error) {
 	return val, nil
 }
 
-// ValidateSysctl validates an sysctl and returns it.
+// ValidateSysctl validates a sysctl and returns it.
 func ValidateSysctl(val string) (string, error) {
 	validSysctlMap := map[string]bool{
 		"kernel.msgmax":          true,

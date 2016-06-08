@@ -2,13 +2,16 @@ package daemon
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/Sirupsen/logrus"
 	"github.com/docker/docker/container"
+	"github.com/docker/docker/errors"
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/layer"
 	"github.com/docker/docker/pkg/idtools"
 	"github.com/docker/docker/pkg/stringid"
+	"github.com/docker/docker/runconfig"
 	volumestore "github.com/docker/docker/volume/store"
 	"github.com/docker/engine-api/types"
 	containertypes "github.com/docker/engine-api/types/container"
@@ -69,6 +72,10 @@ func (daemon *Daemon) create(params types.ContainerCreateConfig) (retC *containe
 		return nil, err
 	}
 
+	if err := daemon.mergeAndVerifyLogConfig(&params.HostConfig.LogConfig); err != nil {
+		return nil, err
+	}
+
 	if container, err = daemon.newContainer(params.Name, params.Config, imgID); err != nil {
 		return nil, err
 	}
@@ -118,6 +125,9 @@ func (daemon *Daemon) create(params types.ContainerCreateConfig) (retC *containe
 	if params.NetworkingConfig != nil {
 		endpointsConfigs = params.NetworkingConfig.EndpointsConfig
 	}
+	// Make sure NetworkMode has an acceptable value. We do this to ensure
+	// backwards API compatibility.
+	container.HostConfig = runconfig.SetDefaultNetModeIfBlank(container.HostConfig)
 
 	if err := daemon.updateContainerNetworkSettings(container, endpointsConfigs); err != nil {
 		return nil, err
@@ -134,17 +144,44 @@ func (daemon *Daemon) create(params types.ContainerCreateConfig) (retC *containe
 	return container, nil
 }
 
-func (daemon *Daemon) generateSecurityOpt(ipcMode containertypes.IpcMode, pidMode containertypes.PidMode) ([]string, error) {
-	if ipcMode.IsHost() || pidMode.IsHost() {
+func (daemon *Daemon) generateSecurityOpt(ipcMode containertypes.IpcMode, pidMode containertypes.PidMode, privileged bool) ([]string, error) {
+	if ipcMode.IsHost() || pidMode.IsHost() || privileged {
 		return label.DisableSecOpt(), nil
 	}
-	if ipcContainer := ipcMode.Container(); ipcContainer != "" {
+
+	var ipcLabel []string
+	var pidLabel []string
+	ipcContainer := ipcMode.Container()
+	pidContainer := pidMode.Container()
+	if ipcContainer != "" {
 		c, err := daemon.GetContainer(ipcContainer)
 		if err != nil {
 			return nil, err
 		}
+		ipcLabel = label.DupSecOpt(c.ProcessLabel)
+		if pidContainer == "" {
+			return ipcLabel, err
+		}
+	}
+	if pidContainer != "" {
+		c, err := daemon.GetContainer(pidContainer)
+		if err != nil {
+			return nil, err
+		}
 
-		return label.DupSecOpt(c.ProcessLabel), nil
+		pidLabel = label.DupSecOpt(c.ProcessLabel)
+		if ipcContainer == "" {
+			return pidLabel, err
+		}
+	}
+
+	if pidLabel != nil && ipcLabel != nil {
+		for i := 0; i < len(pidLabel); i++ {
+			if pidLabel[i] != ipcLabel[i] {
+				return nil, fmt.Errorf("--ipc and --pid containers SELinux labels aren't the same")
+			}
+		}
+		return pidLabel, nil
 	}
 	return nil, nil
 }
@@ -186,4 +223,29 @@ func (daemon *Daemon) VolumeCreate(name, driverName string, opts, labels map[str
 	apiV := volumeToAPIType(v)
 	apiV.Mountpoint = v.Path()
 	return apiV, nil
+}
+
+func (daemon *Daemon) mergeAndVerifyConfig(config *containertypes.Config, img *image.Image) error {
+	if img != nil && img.Config != nil {
+		if err := merge(config, img.Config); err != nil {
+			return err
+		}
+	}
+	if len(config.Entrypoint) == 0 && len(config.Cmd) == 0 {
+		return fmt.Errorf("No command specified")
+	}
+	return nil
+}
+
+// Checks if the client set configurations for more than one network while creating a container
+func (daemon *Daemon) verifyNetworkingConfig(nwConfig *networktypes.NetworkingConfig) error {
+	if nwConfig == nil || len(nwConfig.EndpointsConfig) <= 1 {
+		return nil
+	}
+	l := make([]string, 0, len(nwConfig.EndpointsConfig))
+	for k := range nwConfig.EndpointsConfig {
+		l = append(l, k)
+	}
+	err := fmt.Errorf("Container cannot be connected to network endpoints: %s", strings.Join(l, ", "))
+	return errors.NewBadRequestError(err)
 }

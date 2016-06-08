@@ -12,6 +12,7 @@ import (
 	"github.com/docker/docker/container"
 	"github.com/docker/docker/daemon/network"
 	derr "github.com/docker/docker/errors"
+	"github.com/docker/docker/pkg/stringid"
 	"github.com/docker/docker/runconfig"
 	containertypes "github.com/docker/engine-api/types/container"
 	networktypes "github.com/docker/engine-api/types/network"
@@ -26,6 +27,7 @@ var (
 	// ErrRootFSReadOnly is returned when a container
 	// rootfs is marked readonly.
 	ErrRootFSReadOnly = errors.New("container rootfs is marked read-only")
+	getPortMapInfo    = container.GetSandboxPortMapInfo
 )
 
 func (daemon *Daemon) buildSandboxOptions(container *container.Container, n libnetwork.Network) ([]libnetwork.SandboxOption, error) {
@@ -46,8 +48,14 @@ func (daemon *Daemon) buildSandboxOptions(container *container.Container, n libn
 
 	if container.HostConfig.NetworkMode.IsHost() {
 		sboxOptions = append(sboxOptions, libnetwork.OptionUseDefaultSandbox())
-		sboxOptions = append(sboxOptions, libnetwork.OptionOriginHostsPath("/etc/hosts"))
-		sboxOptions = append(sboxOptions, libnetwork.OptionOriginResolvConfPath("/etc/resolv.conf"))
+		if len(container.HostConfig.ExtraHosts) == 0 {
+			sboxOptions = append(sboxOptions, libnetwork.OptionOriginHostsPath("/etc/hosts"))
+		}
+		if len(container.HostConfig.DNS) == 0 && len(daemon.configStore.DNS) == 0 &&
+			len(container.HostConfig.DNSSearch) == 0 && len(daemon.configStore.DNSSearch) == 0 &&
+			len(container.HostConfig.DNSOptions) == 0 && len(daemon.configStore.DNSOptions) == 0 {
+			sboxOptions = append(sboxOptions, libnetwork.OptionOriginResolvConfPath("/etc/resolv.conf"))
+		}
 	} else {
 		// OptionUseExternalKey is mandatory for userns support.
 		// But optional for non-userns support
@@ -166,7 +174,7 @@ func (daemon *Daemon) buildSandboxOptions(container *container.Container, n libn
 		libnetwork.OptionPortMapping(pbList),
 		libnetwork.OptionExposedPorts(exposeList))
 
-	// Link feature is supported only for the default bridge network.
+	// Legacy Link feature is supported only for the default bridge network.
 	// return if this call to build join options is not for default bridge network
 	if n.Name() != defaultNetName {
 		return sboxOptions, nil
@@ -485,6 +493,18 @@ func (daemon *Daemon) updateNetworkConfig(container *container.Container, idOrNa
 		if endpointConfig != nil && len(endpointConfig.Aliases) > 0 {
 			return nil, runconfig.ErrUnsupportedNetworkAndAlias
 		}
+	} else {
+		addShortID := true
+		shortID := stringid.TruncateID(container.ID)
+		for _, alias := range endpointConfig.Aliases {
+			if alias == shortID {
+				addShortID = false
+				break
+			}
+		}
+		if addShortID {
+			endpointConfig.Aliases = append(endpointConfig.Aliases, shortID)
+		}
 	}
 
 	n, err := daemon.FindNetwork(idOrName)
@@ -505,6 +525,9 @@ func (daemon *Daemon) updateNetworkConfig(container *container.Container, idOrNa
 }
 
 func (daemon *Daemon) connectToNetwork(container *container.Container, idOrName string, endpointConfig *networktypes.EndpointSettings, updateSettings bool) (err error) {
+	if endpointConfig == nil {
+		endpointConfig = &networktypes.EndpointSettings{}
+	}
 	n, err := daemon.updateNetworkConfig(container, idOrName, endpointConfig, updateSettings)
 	if err != nil {
 		return err
@@ -533,10 +556,7 @@ func (daemon *Daemon) connectToNetwork(container *container.Container, idOrName 
 			}
 		}
 	}()
-
-	if endpointConfig != nil {
-		container.NetworkSettings.Networks[n.Name()] = endpointConfig
-	}
+	container.NetworkSettings.Networks[n.Name()] = endpointConfig
 
 	if err := daemon.updateEndpointNetworkSettings(container, n, ep); err != nil {
 		return err
@@ -567,6 +587,8 @@ func (daemon *Daemon) connectToNetwork(container *container.Container, idOrName 
 	if err := container.UpdateJoinInfo(n, ep); err != nil {
 		return fmt.Errorf("Updating join info failed: %v", err)
 	}
+
+	container.NetworkSettings.Ports = getPortMapInfo(sb)
 
 	daemon.LogNetworkEventWithAttributes(n, "connect", map[string]string{"container": container.ID})
 	return nil
@@ -619,6 +641,8 @@ func disconnectFromNetwork(container *container.Container, n libnetwork.Network,
 	if err := ep.Leave(sbox); err != nil {
 		return fmt.Errorf("container %s failed to leave network %s: %v", container.ID, n.Name(), err)
 	}
+
+	container.NetworkSettings.Ports = getPortMapInfo(sbox)
 
 	if err := ep.Delete(false); err != nil {
 		return fmt.Errorf("endpoint delete failed for container %s on network %s: %v", container.ID, n.Name(), err)

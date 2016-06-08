@@ -13,7 +13,7 @@ import (
 	containerd "github.com/docker/containerd/api/grpc/types"
 	"github.com/docker/docker/pkg/idtools"
 	"github.com/docker/docker/pkg/mount"
-	"github.com/opencontainers/specs/specs-go"
+	specs "github.com/opencontainers/specs/specs-go"
 	"golang.org/x/net/context"
 )
 
@@ -163,15 +163,9 @@ func (clnt *client) Create(containerID string, spec Spec, options ...CreateOptio
 		}
 	}()
 
-	// uid/gid
-	rootfsDir := filepath.Join(container.dir, "rootfs")
-	if err := idtools.MkdirAllAs(rootfsDir, 0700, uid, gid); err != nil && !os.IsExist(err) {
+	if err := idtools.MkdirAllAs(container.dir, 0700, uid, gid); err != nil && !os.IsExist(err) {
 		return err
 	}
-	if err := syscall.Mount(spec.Root.Path, rootfsDir, "bind", syscall.MS_REC|syscall.MS_BIND, ""); err != nil {
-		return err
-	}
-	spec.Root.Path = "rootfs"
 
 	f, err := os.Create(filepath.Join(container.dir, configFilename))
 	if err != nil {
@@ -191,6 +185,17 @@ func (clnt *client) Signal(containerID string, sig int) error {
 	_, err := clnt.remote.apiClient.Signal(context.Background(), &containerd.SignalRequest{
 		Id:     containerID,
 		Pid:    InitFriendlyName,
+		Signal: uint32(sig),
+	})
+	return err
+}
+
+func (clnt *client) SignalProcess(containerID string, pid string, sig int) error {
+	clnt.lock(containerID)
+	defer clnt.unlock(containerID)
+	_, err := clnt.remote.apiClient.Signal(context.Background(), &containerd.SignalRequest{
+		Id:     containerID,
+		Pid:    pid,
 		Signal: uint32(sig),
 	})
 	return err
@@ -258,6 +263,22 @@ func (clnt *client) Stats(containerID string) (*Stats, error) {
 	return (*Stats)(resp), nil
 }
 
+// Take care of the old 1.11.0 behavior in case the version upgrade
+// happenned without a clean daemon shutdown
+func (clnt *client) cleanupOldRootfs(containerID string) {
+	// Unmount and delete the bundle folder
+	if mts, err := mount.GetMounts(); err == nil {
+		for _, mts := range mts {
+			if strings.HasSuffix(mts.Mountpoint, containerID+"/rootfs") {
+				if err := syscall.Unmount(mts.Mountpoint, syscall.MNT_DETACH); err == nil {
+					os.RemoveAll(strings.TrimSuffix(mts.Mountpoint, "/rootfs"))
+				}
+				break
+			}
+		}
+	}
+}
+
 func (clnt *client) setExited(containerID string) error {
 	clnt.lock(containerID)
 	defer clnt.unlock(containerID)
@@ -274,17 +295,7 @@ func (clnt *client) setExited(containerID string) error {
 			ExitCode: exitCode,
 		}})
 
-	// Unmount and delete the bundle folder
-	if mts, err := mount.GetMounts(); err == nil {
-		for _, mts := range mts {
-			if strings.HasSuffix(mts.Mountpoint, containerID+"/rootfs") {
-				if err := syscall.Unmount(mts.Mountpoint, syscall.MNT_DETACH); err == nil {
-					os.RemoveAll(strings.TrimSuffix(mts.Mountpoint, "/rootfs"))
-				}
-				break
-			}
-		}
-	}
+	clnt.cleanupOldRootfs(containerID)
 
 	return err
 }
@@ -378,6 +389,81 @@ func (clnt *client) getOrCreateExitNotifier(containerID string) *exitNotifier {
 		clnt.exitNotifiers[containerID] = w
 	}
 	return w
+}
+
+func (clnt *client) restore(cont *containerd.Container, options ...CreateOption) (err error) {
+	clnt.lock(cont.Id)
+	defer clnt.unlock(cont.Id)
+
+	logrus.Debugf("restore container %s state %s", cont.Id, cont.Status)
+
+	containerID := cont.Id
+	if _, err := clnt.getContainer(containerID); err == nil {
+		return fmt.Errorf("container %s is already active", containerID)
+	}
+
+	defer func() {
+		if err != nil {
+			clnt.deleteContainer(cont.Id)
+		}
+	}()
+
+	container := clnt.newContainer(cont.BundlePath, options...)
+	container.systemPid = systemPid(cont)
+
+	var terminal bool
+	for _, p := range cont.Processes {
+		if p.Pid == InitFriendlyName {
+			terminal = p.Terminal
+		}
+	}
+
+	iopipe, err := container.openFifos(terminal)
+	if err != nil {
+		return err
+	}
+
+	if err := clnt.backend.AttachStreams(containerID, *iopipe); err != nil {
+		return err
+	}
+
+	clnt.appendContainer(container)
+
+	err = clnt.backend.StateChanged(containerID, StateInfo{
+		CommonStateInfo: CommonStateInfo{
+			State: StateRestore,
+			Pid:   container.systemPid,
+		}})
+
+	if err != nil {
+		return err
+	}
+
+	if event, ok := clnt.remote.pastEvents[containerID]; ok {
+		// This should only be a pause or resume event
+		if event.Type == StatePause || event.Type == StateResume {
+			return clnt.backend.StateChanged(containerID, StateInfo{
+				CommonStateInfo: CommonStateInfo{
+					State: event.Type,
+					Pid:   container.systemPid,
+				}})
+		}
+
+		logrus.Warnf("unexpected backlog event: %#v", event)
+	}
+
+	return nil
+}
+
+func (clnt *client) Restore(containerID string, options ...CreateOption) error {
+	cont, err := clnt.getContainerdContainer(containerID)
+	if err == nil && cont.Status != "stopped" {
+		if err := clnt.restore(cont, options...); err != nil {
+			logrus.Errorf("error restoring %s: %v", containerID, err)
+		}
+		return nil
+	}
+	return clnt.setExited(containerID)
 }
 
 type exitNotifier struct {

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"syscall"
 
+	"google.golang.org/grpc"
+
 	"github.com/Sirupsen/logrus"
 	"github.com/docker/docker/container"
 	"github.com/docker/docker/errors"
@@ -39,6 +41,9 @@ func (daemon *Daemon) ContainerStart(name string, hostConfig *containertypes.Hos
 			logrus.Warn("DEPRECATED: Setting host configuration options when the container starts is deprecated and will be removed in Docker 1.12")
 			oldNetworkMode := container.HostConfig.NetworkMode
 			if err := daemon.setSecurityOptions(container, hostConfig); err != nil {
+				return err
+			}
+			if err := daemon.mergeAndVerifyLogConfig(&hostConfig.LogConfig); err != nil {
 				return err
 			}
 			if err := daemon.setHostConfig(container, hostConfig); err != nil {
@@ -107,10 +112,6 @@ func (daemon *Daemon) containerStart(container *container.Container) (err error)
 			}
 			container.ToDisk()
 			daemon.Cleanup(container)
-			attributes := map[string]string{
-				"exitCode": fmt.Sprintf("%d", container.ExitCode),
-			}
-			daemon.LogContainerEventWithAttributes(container, "die", attributes)
 		}
 	}()
 
@@ -132,26 +133,24 @@ func (daemon *Daemon) containerStart(container *container.Container) (err error)
 	}
 
 	if err := daemon.containerd.Create(container.ID, *spec, libcontainerd.WithRestartManager(container.RestartManager(true))); err != nil {
+		errDesc := grpc.ErrorDesc(err)
+		logrus.Errorf("Create container failed with error: %s", errDesc)
 		// if we receive an internal error from the initial start of a container then lets
 		// return it instead of entering the restart loop
 		// set to 127 for container cmd not found/does not exist)
-		if strings.Contains(err.Error(), "executable file not found") ||
-			strings.Contains(err.Error(), "no such file or directory") ||
-			strings.Contains(err.Error(), "system cannot find the file specified") {
+		if strings.Contains(errDesc, "executable file not found") ||
+			strings.Contains(errDesc, "no such file or directory") ||
+			strings.Contains(errDesc, "system cannot find the file specified") {
 			container.ExitCode = 127
-			err = fmt.Errorf("Container command '%s' not found or does not exist", container.Path)
 		}
 		// set to 126 for container cmd can't be invoked errors
-		if strings.Contains(err.Error(), syscall.EACCES.Error()) {
+		if strings.Contains(errDesc, syscall.EACCES.Error()) {
 			container.ExitCode = 126
-			err = fmt.Errorf("Container command '%s' could not be invoked", container.Path)
 		}
 
 		container.Reset(false)
 
-		// start event is logged even on error
-		daemon.LogContainerEvent(container, "start")
-		return err
+		return fmt.Errorf("%s", errDesc)
 	}
 
 	return nil

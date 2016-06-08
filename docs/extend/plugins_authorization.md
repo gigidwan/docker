@@ -156,8 +156,7 @@ should implement the following two methods:
     "RequestMethod":     "The HTTP method",
     "RequestURI":        "The HTTP request URI",
     "RequestBody":       "Byte array containing the raw HTTP request body",
-    "RequestHeader":     "Byte array containing the raw HTTP request header as a map[string][]string ",
-    "RequestStatusCode": "Request status code"
+    "RequestHeader":     "Byte array containing the raw HTTP request header as a map[string][]string "
 }
 ```
 
@@ -182,7 +181,6 @@ should implement the following two methods:
     "RequestURI":        "The HTTP request URI",
     "RequestBody":       "Byte array containing the raw HTTP request body",
     "RequestHeader":     "Byte array containing the raw HTTP request header as a map[string][]string",
-    "RequestStatusCode": "Request status code",
     "ResponseBody":      "Byte array containing the raw HTTP response body",
     "ResponseHeader":    "Byte array containing the raw HTTP response header as a map[string][]string",
     "ResponseStatusCode":"Response status code"
@@ -195,16 +193,9 @@ should implement the following two methods:
 {
    "Allow":              "Determined whether the user is allowed or not",
    "Msg":                "The authorization message",
-   "Err":                "The error message if things go wrong",
-   "ModifiedBody":       "Byte array containing a modified body of the raw HTTP body (or null if no changes required)",
-   "ModifiedHeader":     "Byte array containing a modified header of the HTTP response (or null if no changes required)",
-   "ModifiedStatusCode": "int containing the modified version of the status code (or 0 if not change is required)"
+   "Err":                "The error message if things go wrong"
 }
 ```
-
-The modified response enables the authorization plugin to manipulate the content
-of the HTTP response. In case of more than one plugin, each subsequent plugin
-receives a response (optionally) modified by a previous plugin.
 
 ### Request authorization
 

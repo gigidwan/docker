@@ -8,7 +8,6 @@ package authorization
 import (
 	"encoding/json"
 	"io/ioutil"
-	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -29,7 +28,7 @@ const pluginAddress = "authzplugin.sock"
 
 func TestAuthZRequestPluginError(t *testing.T) {
 	server := authZPluginTestServer{t: t}
-	go server.start()
+	server.start()
 	defer server.stop()
 
 	authZPlugin := createTestPlugin(t)
@@ -60,7 +59,7 @@ func TestAuthZRequestPluginError(t *testing.T) {
 
 func TestAuthZRequestPlugin(t *testing.T) {
 	server := authZPluginTestServer{t: t}
-	go server.start()
+	server.start()
 	defer server.stop()
 
 	authZPlugin := createTestPlugin(t)
@@ -92,7 +91,7 @@ func TestAuthZRequestPlugin(t *testing.T) {
 
 func TestAuthZResponsePlugin(t *testing.T) {
 	server := authZPluginTestServer{t: t}
-	go server.start()
+	server.start()
 	defer server.stop()
 
 	authZPlugin := createTestPlugin(t)
@@ -139,7 +138,6 @@ func TestResponseModifier(t *testing.T) {
 }
 
 func TestDrainBody(t *testing.T) {
-
 	tests := []struct {
 		length             int // length is the message length send to drainBody
 		expectedBodyLength int // expectedBodyLength is the expected body length after drainBody is called
@@ -151,17 +149,16 @@ func TestDrainBody(t *testing.T) {
 	}
 
 	for _, test := range tests {
-
 		msg := strings.Repeat("a", test.length)
 		body, closer, err := drainBody(ioutil.NopCloser(bytes.NewReader([]byte(msg))))
+		if err != nil {
+			t.Fatal(err)
+		}
 		if len(body) != test.expectedBodyLength {
 			t.Fatalf("Body must be copied, actual length: '%d'", len(body))
 		}
 		if closer == nil {
 			t.Fatalf("Closer must not be nil")
-		}
-		if err != nil {
-			t.Fatalf("Error must not be nil: '%v'", err)
 		}
 		modified, err := ioutil.ReadAll(closer)
 		if err != nil {
@@ -207,7 +204,7 @@ func createTestPlugin(t *testing.T) *authorizationPlugin {
 	plugin := &plugins.Plugin{Name: "authz"}
 	pwd, err := os.Getwd()
 	if err != nil {
-		log.Fatal(err)
+		t.Fatal(err)
 	}
 
 	plugin.Client, err = plugins.NewClient("unix:///"+path.Join(pwd, pluginAddress), tlsconfig.Options{InsecureSkipVerify: true})
@@ -226,28 +223,31 @@ type authZPluginTestServer struct {
 	recordedRequest Request
 	// response stores the response sent from the plugin to the daemon
 	replayResponse Response
+	server         *httptest.Server
 }
 
 // start starts the test server that implements the plugin
 func (t *authZPluginTestServer) start() {
 	r := mux.NewRouter()
 	os.Remove(pluginAddress)
-	l, err := net.ListenUnix("unix", &net.UnixAddr{Name: pluginAddress, Net: "unix"})
-	if err != nil {
-		t.t.Fatalf("Failed to listen %v", err)
-	}
+	l, _ := net.ListenUnix("unix", &net.UnixAddr{Name: pluginAddress, Net: "unix"})
 	t.listener = l
-
 	r.HandleFunc("/Plugin.Activate", t.activate)
 	r.HandleFunc("/"+AuthZApiRequest, t.auth)
 	r.HandleFunc("/"+AuthZApiResponse, t.auth)
-	t.listener, _ = net.Listen("tcp", pluginAddress)
-	server := http.Server{Handler: r, Addr: pluginAddress}
-	server.Serve(l)
+	t.server = &httptest.Server{
+		Listener: l,
+		Config: &http.Server{
+			Handler: r,
+			Addr:    pluginAddress,
+		},
+	}
+	t.server.Start()
 }
 
 // stop stops the test server that implements the plugin
 func (t *authZPluginTestServer) stop() {
+	t.server.Close()
 	os.Remove(pluginAddress)
 	if t.listener != nil {
 		t.listener.Close()
@@ -257,20 +257,14 @@ func (t *authZPluginTestServer) stop() {
 // auth is a used to record/replay the authentication api messages
 func (t *authZPluginTestServer) auth(w http.ResponseWriter, r *http.Request) {
 	t.recordedRequest = Request{}
-	defer r.Body.Close()
-	body, err := ioutil.ReadAll(r.Body)
+	body, _ := ioutil.ReadAll(r.Body)
+	r.Body.Close()
 	json.Unmarshal(body, &t.recordedRequest)
-	b, err := json.Marshal(t.replayResponse)
-	if err != nil {
-		log.Fatal(err)
-	}
+	b, _ := json.Marshal(t.replayResponse)
 	w.Write(b)
 }
 
 func (t *authZPluginTestServer) activate(w http.ResponseWriter, r *http.Request) {
-	b, err := json.Marshal(plugins.Manifest{Implements: []string{AuthZApiImplements}})
-	if err != nil {
-		log.Fatal(err)
-	}
+	b, _ := json.Marshal(plugins.Manifest{Implements: []string{AuthZApiImplements}})
 	w.Write(b)
 }

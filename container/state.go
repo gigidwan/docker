@@ -27,6 +27,7 @@ type State struct {
 	StartedAt         time.Time
 	FinishedAt        time.Time
 	waitChan          chan struct{}
+	Health            *Health
 }
 
 // NewState creates a default state object with a fresh channel for state changes.
@@ -46,6 +47,9 @@ func (s *State) String() string {
 			return fmt.Sprintf("Restarting (%d) %s ago", s.ExitCode, units.HumanDuration(time.Now().UTC().Sub(s.FinishedAt)))
 		}
 
+		if h := s.Health; h != nil {
+			return fmt.Sprintf("Up %s (%s)", units.HumanDuration(time.Now().UTC().Sub(s.StartedAt)), h.String())
+		}
 		return fmt.Sprintf("Up %s", units.HumanDuration(time.Now().UTC().Sub(s.StartedAt)))
 	}
 
@@ -117,25 +121,6 @@ func wait(waitChan <-chan struct{}, timeout time.Duration) error {
 	}
 }
 
-// WaitRunning waits until state is running. If state is already
-// running it returns immediately. If you want wait forever you must
-// supply negative timeout. Returns pid, that was passed to
-// SetRunning.
-func (s *State) WaitRunning(timeout time.Duration) (int, error) {
-	s.Lock()
-	if s.Running {
-		pid := s.Pid
-		s.Unlock()
-		return pid, nil
-	}
-	waitChan := s.waitChan
-	s.Unlock()
-	if err := wait(waitChan, timeout); err != nil {
-		return -1, err
-	}
-	return s.GetPID(), nil
-}
-
 // WaitStop waits until state is stopped. If state already stopped it returns
 // immediately. If you want wait forever you must supply negative timeout.
 // Returns exit code, that was passed to SetStoppedLocking
@@ -188,8 +173,6 @@ func (s *State) SetRunning(pid int, initial bool) {
 	if initial {
 		s.StartedAt = time.Now().UTC()
 	}
-	close(s.waitChan) // fire waiters for start
-	s.waitChan = make(chan struct{})
 }
 
 // SetStoppedLocking locks the container state is sets it to "stopped".

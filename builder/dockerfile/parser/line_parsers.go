@@ -34,7 +34,7 @@ func parseSubCommand(rest string) (*Node, map[string]bool, error) {
 		return nil, nil, nil
 	}
 
-	_, child, err := parseLine(rest)
+	_, child, err := ParseLine(rest)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -94,12 +94,12 @@ func parseWords(rest string) []string {
 				blankOK = true
 				phase = inQuote
 			}
-			if ch == '\\' {
+			if ch == tokenEscape {
 				if pos+1 == len(rest) {
-					continue // just skip \ at end
+					continue // just skip an escape token at end of line
 				}
-				// If we're not quoted and we see a \, then always just
-				// add \ plus the char to the word, even if the char
+				// If we're not quoted and we see an escape token, then always just
+				// add the escape token plus the char to the word, even if the char
 				// is a quote.
 				word += string(ch)
 				pos++
@@ -112,11 +112,11 @@ func parseWords(rest string) []string {
 			if ch == quote {
 				phase = inWord
 			}
-			// \ is special except for ' quotes - can't escape anything for '
-			if ch == '\\' && quote != '\'' {
+			// The escape token is special except for ' quotes - can't escape anything for '
+			if ch == tokenEscape && quote != '\'' {
 				if pos+1 == len(rest) {
 					phase = inWord
-					continue // just skip \ at end
+					continue // just skip the escape token at end
 				}
 				pos++
 				nextCh := rune(rest[pos])
@@ -328,4 +328,33 @@ func parseMaybeJSONToList(rest string) (*Node, map[string]bool, error) {
 	}
 
 	return parseStringsWhitespaceDelimited(rest)
+}
+
+// The HEALTHCHECK command is like parseMaybeJSON, but has an extra type argument.
+func parseHealthConfig(rest string) (*Node, map[string]bool, error) {
+	// Find end of first argument
+	var sep int
+	for ; sep < len(rest); sep++ {
+		if unicode.IsSpace(rune(rest[sep])) {
+			break
+		}
+	}
+	next := sep
+	for ; next < len(rest); next++ {
+		if !unicode.IsSpace(rune(rest[next])) {
+			break
+		}
+	}
+
+	if sep == 0 {
+		return nil, nil, nil
+	}
+
+	typ := rest[:sep]
+	cmd, attrs, err := parseMaybeJSON(rest[next:])
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return &Node{Value: typ, Next: cmd, Attributes: attrs}, nil, err
 }

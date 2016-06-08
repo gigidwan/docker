@@ -14,10 +14,14 @@ import (
 	"github.com/docker/docker/errors"
 	"github.com/docker/docker/libcontainerd"
 	"github.com/docker/docker/pkg/pools"
+	"github.com/docker/docker/pkg/signal"
 	"github.com/docker/docker/pkg/term"
 	"github.com/docker/engine-api/types"
 	"github.com/docker/engine-api/types/strslice"
 )
+
+// Seconds to wait after sending TERM before trying KILL
+const termProcessTimeout = 10
 
 func (d *Daemon) registerExecCommand(container *container.Container, config *exec.Config) {
 	// Storing execs in container in order to kill them gracefully whenever the container is stopped or removed.
@@ -88,8 +92,8 @@ func (d *Daemon) getActiveContainer(name string) (*container.Container, error) {
 }
 
 // ContainerExecCreate sets up an exec in a running container.
-func (d *Daemon) ContainerExecCreate(config *types.ExecConfig) (string, error) {
-	container, err := d.getActiveContainer(config.Container)
+func (d *Daemon) ContainerExecCreate(name string, config *types.ExecConfig) (string, error) {
+	container, err := d.getActiveContainer(name)
 	if err != nil {
 		return "", err
 	}
@@ -130,7 +134,8 @@ func (d *Daemon) ContainerExecCreate(config *types.ExecConfig) (string, error) {
 
 // ContainerExecStart starts a previously set up exec instance. The
 // std streams are set up.
-func (d *Daemon) ContainerExecStart(name string, stdin io.ReadCloser, stdout io.Writer, stderr io.Writer) (err error) {
+// If ctx is cancelled, the process is terminated.
+func (d *Daemon) ContainerExecStart(ctx context.Context, name string, stdin io.ReadCloser, stdout io.Writer, stderr io.Writer) (err error) {
 	var (
 		cStdin           io.ReadCloser
 		cStdout, cStderr io.Writer
@@ -197,15 +202,31 @@ func (d *Daemon) ContainerExecStart(name string, stdin io.ReadCloser, stdout io.
 		return nil
 	}
 
-	attachErr := container.AttachStreams(context.Background(), ec.StreamConfig, ec.OpenStdin, true, ec.Tty, cStdin, cStdout, cStderr, ec.DetachKeys)
+	attachErr := container.AttachStreams(ctx, ec.StreamConfig, ec.OpenStdin, true, ec.Tty, cStdin, cStdout, cStderr, ec.DetachKeys)
 
 	if err := d.containerd.AddProcess(c.ID, name, p); err != nil {
 		return err
 	}
 
-	err = <-attachErr
-	if err != nil {
-		return fmt.Errorf("attach failed with error: %v", err)
+	select {
+	case <-ctx.Done():
+		logrus.Debugf("Sending TERM signal to process %v in container %v", name, c.ID)
+		d.containerd.SignalProcess(c.ID, name, int(signal.SignalMap["TERM"]))
+		select {
+		case <-time.After(termProcessTimeout * time.Second):
+			logrus.Infof("Container %v, process %v failed to exit within %d seconds of signal TERM - using the force", c.ID, name, termProcessTimeout)
+			d.containerd.SignalProcess(c.ID, name, int(signal.SignalMap["KILL"]))
+		case <-attachErr:
+			// TERM signal worked
+		}
+		return fmt.Errorf("context cancelled")
+	case err := <-attachErr:
+		if err != nil {
+			if _, ok := err.(container.DetachError); !ok {
+				return fmt.Errorf("exec attach failed with error: %v", err)
+			}
+			d.LogContainerEvent(c, "exec_detach")
+		}
 	}
 	return nil
 }

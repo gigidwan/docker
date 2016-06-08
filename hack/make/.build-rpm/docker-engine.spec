@@ -60,6 +60,12 @@ Requires: device-mapper >= 1.02.90-2
 %global with_selinux 1
 %endif
 
+# DWZ problem with multiple golang binary, see bug
+# https://bugzilla.redhat.com/show_bug.cgi?id=995136#c12
+%if 0%{?fedora} >= 20 || 0%{?rhel} >= 7 || 0%{?oraclelinux} >= 7
+%global _dwz_low_mem_die_limit 0
+%endif
+
 # start if with_selinux
 %if 0%{?with_selinux}
 # Version of SELinux we were using
@@ -112,12 +118,14 @@ export DOCKER_GITCOMMIT=%{_gitcommit}
 # ./man/md2man-all.sh runs outside the build container (if at all), since we don't have go-md2man here
 
 %check
-./bundles/%{_origversion}/dynbinary/docker -v
+./bundles/%{_origversion}/dynbinary-client/docker -v
+./bundles/%{_origversion}/dynbinary-daemon/dockerd -v
 
 %install
 # install binary
 install -d $RPM_BUILD_ROOT/%{_bindir}
-install -p -m 755 bundles/%{_origversion}/dynbinary/docker-%{_origversion} $RPM_BUILD_ROOT/%{_bindir}/docker
+install -p -m 755 bundles/%{_origversion}/dynbinary-client/docker-%{_origversion} $RPM_BUILD_ROOT/%{_bindir}/docker
+install -p -m 755 bundles/%{_origversion}/dynbinary-daemon/dockerd-%{_origversion} $RPM_BUILD_ROOT/%{_bindir}/dockerd
 
 # install containerd
 install -p -m 755 /usr/local/bin/containerd $RPM_BUILD_ROOT/%{_bindir}/docker-containerd
@@ -125,7 +133,7 @@ install -p -m 755 /usr/local/bin/containerd-shim $RPM_BUILD_ROOT/%{_bindir}/dock
 install -p -m 755 /usr/local/bin/ctr $RPM_BUILD_ROOT/%{_bindir}/docker-containerd-ctr
 
 # install runc
-install -p -m 755 /usr/local/bin/runc $RPM_BUILD_ROOT/%{_bindir}/docker-runc
+install -p -m 755 /usr/local/sbin/runc $RPM_BUILD_ROOT/%{_bindir}/docker-runc
 
 # install udev rules
 install -d $RPM_BUILD_ROOT/%{_sysconfdir}/udev/rules.d
@@ -157,6 +165,8 @@ install -d %{buildroot}%{_mandir}/man1
 install -p -m 644 man/man1/*.1 $RPM_BUILD_ROOT/%{_mandir}/man1
 install -d %{buildroot}%{_mandir}/man5
 install -p -m 644 man/man5/*.5 $RPM_BUILD_ROOT/%{_mandir}/man5
+install -d %{buildroot}%{_mandir}/man8
+install -p -m 644 man/man5/*.8 $RPM_BUILD_ROOT/%{_mandir}/man8
 
 # add vimfiles
 install -d $RPM_BUILD_ROOT/usr/share/vim/vimfiles/doc
@@ -174,6 +184,7 @@ install -p -m 644 contrib/syntax/nano/Dockerfile.nanorc $RPM_BUILD_ROOT/usr/shar
 %files
 %doc AUTHORS CHANGELOG.md CONTRIBUTING.md LICENSE MAINTAINERS NOTICE README.md
 /%{_bindir}/docker
+/%{_bindir}/dockerd
 /%{_bindir}/docker-containerd
 /%{_bindir}/docker-containerd-shim
 /%{_bindir}/docker-containerd-ctr
@@ -192,6 +203,7 @@ install -p -m 644 contrib/syntax/nano/Dockerfile.nanorc $RPM_BUILD_ROOT/usr/shar
 %doc
 /%{_mandir}/man1/*
 /%{_mandir}/man5/*
+/%{_mandir}/man8/*
 /usr/share/vim/vimfiles/doc/dockerfile.txt
 /usr/share/vim/vimfiles/ftdetect/dockerfile.vim
 /usr/share/vim/vimfiles/syntax/dockerfile.vim

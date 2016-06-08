@@ -5,12 +5,16 @@ package graphtest
 import (
 	"fmt"
 	"io/ioutil"
+	"math/rand"
 	"os"
 	"path"
+	"reflect"
 	"syscall"
 	"testing"
+	"unsafe"
 
 	"github.com/docker/docker/daemon/graphdriver"
+	"github.com/docker/go-units"
 )
 
 var (
@@ -94,7 +98,7 @@ func cleanup(t *testing.T, d *Driver) {
 	os.RemoveAll(d.root)
 }
 
-// GetDriver create a new driver with given name or return a existing driver with the name updating the reference count.
+// GetDriver create a new driver with given name or return an existing driver with the name updating the reference count.
 func GetDriver(t *testing.T, name string) graphdriver.Driver {
 	if drv == nil {
 		drv = newDriver(t, name)
@@ -172,7 +176,7 @@ func readDir(dir string) ([]os.FileInfo, error) {
 	return b, nil
 }
 
-// DriverTestCreateEmpty creates an new image and verifies it is empty and the right metadata
+// DriverTestCreateEmpty creates a new image and verifies it is empty and the right metadata
 func DriverTestCreateEmpty(t *testing.T, drivername string) {
 	driver := GetDriver(t, drivername)
 	defer PutDriver(t)
@@ -180,6 +184,12 @@ func DriverTestCreateEmpty(t *testing.T, drivername string) {
 	if err := driver.Create("empty", "", "", nil); err != nil {
 		t.Fatal(err)
 	}
+
+	defer func() {
+		if err := driver.Remove("empty"); err != nil {
+			t.Fatal(err)
+		}
+	}()
 
 	if !driver.Exists("empty") {
 		t.Fatal("Newly created image doesn't exist")
@@ -203,11 +213,6 @@ func DriverTestCreateEmpty(t *testing.T, drivername string) {
 	}
 
 	driver.Put("empty")
-
-	if err := driver.Remove("empty"); err != nil {
-		t.Fatal(err)
-	}
-
 }
 
 func createBase(t *testing.T, driver graphdriver.Driver, name string) {
@@ -260,7 +265,6 @@ func verifyBase(t *testing.T, driver graphdriver.Driver, name string) {
 	if len(fis) != 2 {
 		t.Fatal("Unexpected files in base image")
 	}
-
 }
 
 // DriverTestCreateBase create a base driver and verify.
@@ -269,11 +273,12 @@ func DriverTestCreateBase(t *testing.T, drivername string) {
 	defer PutDriver(t)
 
 	createBase(t, driver, "Base")
+	defer func() {
+		if err := driver.Remove("Base"); err != nil {
+			t.Fatal(err)
+		}
+	}()
 	verifyBase(t, driver, "Base")
-
-	if err := driver.Remove("Base"); err != nil {
-		t.Fatal(err)
-	}
 }
 
 // DriverTestCreateSnap Create a driver and snap and verify.
@@ -283,17 +288,62 @@ func DriverTestCreateSnap(t *testing.T, drivername string) {
 
 	createBase(t, driver, "Base")
 
+	defer func() {
+		if err := driver.Remove("Base"); err != nil {
+			t.Fatal(err)
+		}
+	}()
+
 	if err := driver.Create("Snap", "Base", "", nil); err != nil {
 		t.Fatal(err)
 	}
+	defer func() {
+		if err := driver.Remove("Snap"); err != nil {
+			t.Fatal(err)
+		}
+	}()
 
 	verifyBase(t, driver, "Snap")
+}
 
-	if err := driver.Remove("Snap"); err != nil {
+func writeRandomFile(path string, size uint64) error {
+	buf := make([]int64, size/8)
+
+	r := rand.NewSource(0)
+	for i := range buf {
+		buf[i] = r.Int63()
+	}
+
+	// Cast to []byte
+	header := *(*reflect.SliceHeader)(unsafe.Pointer(&buf))
+	header.Len *= 8
+	header.Cap *= 8
+	data := *(*[]byte)(unsafe.Pointer(&header))
+
+	return ioutil.WriteFile(path, data, 0700)
+}
+
+// DriverTestSetQuota Create a driver and test setting quota.
+func DriverTestSetQuota(t *testing.T, drivername string) {
+	driver := GetDriver(t, drivername)
+	defer PutDriver(t)
+
+	createBase(t, driver, "Base")
+	storageOpt := make(map[string]string, 1)
+	storageOpt["size"] = "50M"
+	if err := driver.Create("zfsTest", "Base", "", storageOpt); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := driver.Remove("Base"); err != nil {
+	mountPath, err := driver.Get("zfsTest", "")
+	if err != nil {
 		t.Fatal(err)
 	}
+
+	quota := uint64(50 * units.MiB)
+	err = writeRandomFile(path.Join(mountPath, "file"), quota*2)
+	if pathError, ok := err.(*os.PathError); ok && pathError.Err != syscall.EDQUOT {
+		t.Fatalf("expect write() to fail with %v, got %v", syscall.EDQUOT, err)
+	}
+
 }

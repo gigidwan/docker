@@ -35,6 +35,8 @@ func (cli *DockerCli) CmdStats(args ...string) error {
 	showAll := len(names) == 0
 	closeChan := make(chan error)
 
+	ctx := context.Background()
+
 	// monitorContainerEvents watches for container creation and removal (only
 	// used when calling `docker stats` without arguments).
 	monitorContainerEvents := func(started chan<- struct{}, c chan events.Message) {
@@ -43,7 +45,7 @@ func (cli *DockerCli) CmdStats(args ...string) error {
 		options := types.EventsOptions{
 			Filters: f,
 		}
-		resBody, err := cli.client.Events(context.Background(), options)
+		resBody, err := cli.client.Events(ctx, options)
 		// Whether we successfully subscribed to events or not, we can now
 		// unblock the main goroutine.
 		close(started)
@@ -73,7 +75,7 @@ func (cli *DockerCli) CmdStats(args ...string) error {
 		options := types.ContainerListOptions{
 			All: *all,
 		}
-		cs, err := cli.client.ContainerList(context.Background(), options)
+		cs, err := cli.client.ContainerList(ctx, options)
 		if err != nil {
 			closeChan <- err
 		}
@@ -84,7 +86,7 @@ func (cli *DockerCli) CmdStats(args ...string) error {
 			}
 			if cStats.add(s) {
 				waitFirst.Add(1)
-				go s.Collect(cli.client, !*noStream, waitFirst)
+				go s.Collect(ctx, cli.client, !*noStream, waitFirst)
 			}
 		}
 	}
@@ -108,7 +110,7 @@ func (cli *DockerCli) CmdStats(args ...string) error {
 				}
 				if cStats.add(s) {
 					waitFirst.Add(1)
-					go s.Collect(cli.client, !*noStream, waitFirst)
+					go s.Collect(ctx, cli.client, !*noStream, waitFirst)
 				}
 			}
 		})
@@ -124,7 +126,7 @@ func (cli *DockerCli) CmdStats(args ...string) error {
 			}
 			if cStats.add(s) {
 				waitFirst.Add(1)
-				go s.Collect(cli.client, !*noStream, waitFirst)
+				go s.Collect(ctx, cli.client, !*noStream, waitFirst)
 			}
 		})
 
@@ -157,7 +159,7 @@ func (cli *DockerCli) CmdStats(args ...string) error {
 			}
 			if cStats.add(s) {
 				waitFirst.Add(1)
-				go s.Collect(cli.client, !*noStream, waitFirst)
+				go s.Collect(ctx, cli.client, !*noStream, waitFirst)
 			}
 		}
 
@@ -212,13 +214,6 @@ func (cli *DockerCli) CmdStats(args ...string) error {
 		copy(cs, cStats.cs)
 		if err := cs.Display(cli, format, !*noTrunc); err != nil && !*noStream {
 			toRemove = append(toRemove, i)
-		}
-		for j := len(toRemove) - 1; j >= 0; j-- {
-			i := toRemove[j]
-			cStats.cs = append(cStats.cs[:i], cStats.cs[i+1:]...)
-		}
-		if len(cStats.cs) == 0 && !showAll {
-			return nil
 		}
 		cStats.mu.Unlock()
 //		w.Flush()

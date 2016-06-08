@@ -75,7 +75,8 @@ _dockerfile_env() {
 
 clean() {
 	local packages=(
-		"${PROJECT}/docker" # package main
+		"${PROJECT}/cmd/dockerd" # daemon package main
+		"${PROJECT}/cmd/docker" # client package main
 		"${PROJECT}/integration-cli" # external tests
 	)
 	local dockerPlatforms=( ${DOCKER_ENGINE_OSARCH:="linux/amd64"} $(_dockerfile_env DOCKER_CROSSPLATFORMS) )
@@ -107,7 +108,7 @@ clean() {
 				go list -e -tags "$buildTags" -f '{{join .Deps "\n"}}' "${packages[@]}"
 				go list -e -tags "$buildTags" -f '{{join .TestImports "\n"}}' "${packages[@]}"
 			done
-		done | grep -vE "^${PROJECT}" | sort -u
+		done | grep -vE "^${PROJECT}/" | sort -u
 	) )
 	imports=( $(go list -e -f '{{if not .Standard}}{{.ImportPath}}{{end}}' "${imports[@]}") )
 	unset IFS
