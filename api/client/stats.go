@@ -215,7 +215,7 @@ func (cli *DockerCli) CmdStats(args ...string) error {
 			s.mu.RLock()
 			if err := s.err; err != nil && !*noStream {
 				errStr := "--"
-				s = {errStr, 0, 0, 0, 0, 0, 0, 0, 0, 0, errStr}
+				s = stat.ContainerStats{errStr, 0, 0, 0, 0, 0, 0, 0, 0, 0, errStr}
 			}
 			s.mu.RUnlock()
 		}
