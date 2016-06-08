@@ -2,6 +2,7 @@ package client
 
 import (
 	"encoding/json"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -52,7 +53,6 @@ func (s *stats) isKnownContainer(cid string) (int, bool) {
 }
 
 func (s *containerStats) Collect(ctx context.Context, cli client.APIClient, streamStats bool, waitFirst *sync.WaitGroup) {
-	logrus.Debugf("collecting stats for %s", s.Name)
 	var (
 		getFirst       bool
 		previousCPU    uint64
@@ -68,7 +68,7 @@ func (s *containerStats) Collect(ctx context.Context, cli client.APIClient, stre
 		}
 	}()
 
-	responseBody, err := cli.ContainerStats(ctx, s.Name, streamStats)
+	responseBody, err := cli.ContainerStats(ctx, s.cs.Name, streamStats)
 	if err != nil {
 		s.mu.Lock()
 		s.err = err
@@ -158,18 +158,18 @@ func (s *containerStats) Collect(ctx context.Context, cli client.APIClient, stre
 	}
 }
 
-func (s []*containerStats) Display(cli *DockerCli, format *string, trunc bool) error {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.err != nil {
-		format = "%s\t%s\t%s / %s\t%s\t%s / %s\t%s / %s\t%s\n"
-		errStr := "--"
-		fmt.Fprintf(w, format,
-			s.Name, errStr, errStr, errStr, errStr, errStr, errStr, errStr, errStr, errStr,
-		)
-		err := s.err
-		return err
-	}
+func (s []*stat.ContainerStats) Display(cli *DockerCli, format *string, trunc bool) error {
+	//s.mu.RLock()
+	//defer s.mu.RUnlock()
+	//if s.err != nil {
+		//format = "%s\t%s\t%s / %s\t%s\t%s / %s\t%s / %s\t%s\n"
+		//errStr := "--"
+		//fmt.Fprintf(w, format,
+			//s.Name, errStr, errStr, errStr, errStr, errStr, errStr, errStr, errStr, errStr,
+		//)
+		//err := s.err
+		//return err
+	//}
 	stats := []stat.ContainerStats{}
 	for _, stat := range s {
 		stats = append(stats, stat)

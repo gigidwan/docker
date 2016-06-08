@@ -5,7 +5,6 @@ import (
 	"io"
 	"strings"
 	"sync"
-	"text/tabwriter"
 	"time"
 
 	"golang.org/x/net/context"
@@ -210,11 +209,24 @@ func (cli *DockerCli) CmdStats(args ...string) error {
 //		for _, s := range cStats.cs {
 //			cs = append(cs, s)
 //		}
-		cs := make([]*containerStats, len(cStats.cs))
-		copy(cs, cStats.cs)
-		if err := cs.Display(cli, format, !*noTrunc); err != nil && !*noStream {
-			toRemove = append(toRemove, i)
+		//cs := make([]*containerStats, len(cStats.cs))
+		//copy(cs, cStats.cs)
+		for i, s := range cStats.cs {
+			s.mu.RLock()
+			if err := s.err; err != nil && !*noStream {
+				errStr := "--"
+				s = {errStr, 0, 0, 0, 0, 0, 0, 0, 0, 0, errStr}
+			}
+			s.mu.RUnlock()
 		}
+		for i, s := range cStats.cs {
+                        s.mu.RLock()
+			s.Display(cli, format, !*noTrunc)
+                        s.mu.RUnlock()
+                }
+//		if err := cs.Display(cli, format, !*noTrunc); err != nil && !*noStream {
+//			toRemove = append(toRemove, i)
+//		}
 		cStats.mu.Unlock()
 //		w.Flush()
 		if *noStream {
