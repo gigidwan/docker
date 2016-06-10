@@ -158,7 +158,7 @@ func (s *containerStats) Collect(ctx context.Context, cli client.APIClient, stre
 	}
 }
 
-func Display(cli *DockerCli, format *string, trunc bool, stats []*containerStats) {
+func Display(cli *DockerCli, format *string, trunc bool, cs []*containerStats) {
 	//s.mu.RLock()
 	//defer s.mu.RUnlock()
 	//if s.err != nil {
@@ -171,8 +171,10 @@ func Display(cli *DockerCli, format *string, trunc bool, stats []*containerStats
 		//return err
 	//}
 	stats := []stat.ContainerStats{}
-	for _, stat := range stats {
-		stats = append(stats, stat)
+	for _, s := range cs {
+		s.mu.RLock()
+		stats = append(stats, &s.cs)
+		s.mu.RUnlock()
 	}
 	f := *format
 	if len(f) == 0 {
