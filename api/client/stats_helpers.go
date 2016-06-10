@@ -173,7 +173,7 @@ func Display(cli *DockerCli, format *string, trunc bool, cs []*containerStats) {
 	stats := []stat.ContainerStats{}
 	for _, s := range cs {
 		s.mu.RLock()
-		stats = append(stats, &s.cs)
+		stats = append(stats, s.cs)
 		s.mu.RUnlock()
 	}
 	f := *format
