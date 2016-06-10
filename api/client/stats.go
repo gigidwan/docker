@@ -198,7 +198,7 @@ func (cli *DockerCli) CmdStats(args ...string) error {
 
 	for range time.Tick(500 * time.Millisecond) {
 //		printHeader()
-		toRemove := []int{}
+		//toRemove := []int{}
 		cStats.mu.Lock()
 //		for i, s := range cStats.cs {
 //			if err := s.Display(cli, format, !*noTrunc); err != nil && !*noStream {
