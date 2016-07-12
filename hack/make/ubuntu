@@ -79,7 +79,7 @@ bundle_ubuntu() {
 		cp $DEST/../binary/docker-$VERSION $DIR/usr/bin/docker
 	else
 		cp $DEST/../dynbinary-client/docker-$VERSION $DIR/usr/bin/docker
-		cp $DEST/../dynbinary-daemon/dockerd-$VERSION $DIR/usr/bin/docker
+		cp $DEST/../dynbinary-daemon/dockerd-$VERSION $DIR/usr/bin/dockerd
 	fi
 #	cp "$DEST/../binary/docker-$VERSION" "$DIR/usr/bin/docker"
 
