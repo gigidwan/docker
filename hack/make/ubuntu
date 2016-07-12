@@ -81,6 +81,10 @@ bundle_ubuntu() {
 		cp $DEST/../dynbinary-client/docker-$VERSION $DIR/usr/bin/docker
 		cp $DEST/../dynbinary-daemon/dockerd-$VERSION $DIR/usr/bin/dockerd
 	fi
+	cp /usr/local/bin/docker-runc $DIR/usr/bin/docker-runc
+	cp /usr/local/bin/docker-containerd $DIR/usr/bin/docker-containerd
+	cp /usr/local/bin/docker-containerd-shim $DIR/usr/bin/docker-containerd-shim
+	cp /usr/local/bin/docker-containerd-ctr $DIR/usr/bin/docker-containerd-ctr
 #	cp "$DEST/../binary/docker-$VERSION" "$DIR/usr/bin/docker"
 
 	# Generate postinst/prerm/postrm scripts
