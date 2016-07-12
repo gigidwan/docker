@@ -258,7 +258,7 @@ type containerStatsContext struct {
 }
 
 func (c *containerStatsContext) ID() string {
-//	c.addHeader(containerHeader)
+	c.addHeader(containerHeader)
 	if c.trunc {
 		return stringid.TruncateID(c.s.ID)
 	}
@@ -266,19 +266,19 @@ func (c *containerStatsContext) ID() string {
 }
 
 func (c *containerStatsContext) Name() string {
-//	c.addHeader(nameHeader)
+	c.addHeader(nameHeader)
 	return c.s.Name
 }
 
 func (c *containerStatsContext) Cpu() string {
-//	c.addHeader(statsCPUHeader)
+	c.addHeader(statsCPUHeader)
 	perc := c.s.CPUPercentage
 	percentage := fmt.Sprintf("%.2f%%", perc)
 	return percentage
 }
 
 func (c *containerStatsContext) MemUsage() string {
-//	c.addHeader(statsMemUsageHeader)
+	c.addHeader(statsMemUsageHeader)
 	usage := units.BytesSize(c.s.Memory)
 	limit := units.BytesSize(float64(c.s.MemoryLimit))
 
@@ -287,14 +287,14 @@ func (c *containerStatsContext) MemUsage() string {
 }
 
 func (c *containerStatsContext) Mem() string {
-//	c.addHeader(statsMemHeader)
+	c.addHeader(statsMemHeader)
 	perc := c.s.MemoryPercentage
 	percentage := fmt.Sprintf("%.2f%%", perc)
 	return percentage
 }
 
 func (c *containerStatsContext) NetIO() string {
-//	c.addHeader(statsNetHeader)
+	c.addHeader(statsNetHeader)
 	NetRx := units.HumanSize(c.s.NetworkRx)
 	NetTx := units.HumanSize(float64(c.s.NetworkTx))
 
@@ -303,7 +303,7 @@ func (c *containerStatsContext) NetIO() string {
 }
 
 func (c *containerStatsContext) BlockIO() string {
-//	c.addHeader(statsBlockHeader)
+	c.addHeader(statsBlockHeader)
 	read := units.HumanSize(c.s.BlockRead)
 	write := units.HumanSize(float64(c.s.BlockWrite))
 
@@ -312,7 +312,7 @@ func (c *containerStatsContext) BlockIO() string {
 }
 
 func (c *containerStatsContext) Pid() string {
-//	c.addHeader(statsPidHeader)
+	c.addHeader(statsPidHeader)
 	pid := fmt.Sprintf("%d", c.s.PidsCurrent)
 	return pid
 }
