@@ -555,7 +555,7 @@ func TestImageContextWriteWithNoImage(t *testing.T) {
 }
 
 func TestContainerStatsContextWrite(t *testing.T) {
-+	contexts := []struct {
+	contexts := []struct {
 		context  ContainerStatsContext
 		expected string
 	}{
